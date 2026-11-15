@@ -1,0 +1,14 @@
+{
+  "name": "lunaris-vpn",
+  "version": "0.6.5",
+  "private": true,
+  "scripts": {
+    "test": "node --test ../tests/ui_settings.test.cjs ../tests/ui_background.test.cjs",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle",
+    "android:init": "tauri android init --ci",
+    "android:build": "tauri android build --apk --target aarch64 --ci"
+  },
+  "devDependencies": {"@tauri-apps/cli": "2.10.1"}
+}

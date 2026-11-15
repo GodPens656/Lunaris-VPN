@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+# Keep the package name and org stable so Android updates retain the application ID.
+name = "sever-client"
+version = "0.6.5"
+description = "Lunaris client build tools and legacy compatibility tests; runtime backend is Rust"
+requires-python = ">=3.12,<3.14"
+license = "GPL-3.0-or-later"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [ "pillow>=11,<13", "pytest==8.4.2", "pytest-asyncio==1.2.0"]
+legacy-tests = ["httpx[socks]==0.28.1", "cryptography==46.0.3", "flet==1.0.3", "flet-cli==1.0.3", "flet-desktop==1.0.3", "flet-web==1.0.3"]
+
+[project.scripts]
+sever-vpn = "sever.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sever"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "extensions/sever_vpn/src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["core: requires the downloaded Windows core executables"]
+
+[tool.lunaris]
+ui = "tauri2"
+build_number = 26
+android_application_id = "dev.sever.sever_client"

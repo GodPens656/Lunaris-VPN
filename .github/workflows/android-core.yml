@@ -1,0 +1,41 @@
+name: Build official libbox independently of the developer PC
+on: [workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  libbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SagerNet/sing-box
+          ref: 0b8995879f29a9b98ee027bc17b75e101445b238
+          fetch-depth: 0 # build_shared.ReadTag must find v1.14.0, not embed "unknown".
+      - name: Verify source version
+        run: test "$(git describe --tags --exact-match)" = 'v1.14.0'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK
+        run: sdkmanager 'ndk;29.0.14206865'
+      - name: Build verified upstream API
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          go install github.com/sagernet/gomobile/cmd/gomobile
+          go install github.com/sagernet/gomobile/cmd/gobind
+          go run ./cmd/internal/build_libbox -target android
+          sha256sum libbox.aar libbox-legacy.aar > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libbox-official-v1.14.0
+          path: |
+            libbox.aar
+            libbox-legacy.aar
+            SHA256SUMS
+            LICENSE

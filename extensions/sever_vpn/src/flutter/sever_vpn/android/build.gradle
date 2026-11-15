@@ -1,0 +1,111 @@
+group = 'dev.sever.vpn'
+version = '0.1.0'
+
+buildscript {
+    ext.kotlin_version = '2.1.0'
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.9.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+repositories { google(); mavenCentral() }
+// Resolve the verified AAR as an artifact, so AGP packages it transitively into the app.
+// Direct implementation files('libbox.aar') is forbidden for Android library modules.
+def libboxDirectory = file('libs')
+rootProject.allprojects {
+    repositories { flatDir { dirs libboxDirectory } }
+    // The app DSL is already finalized when Flutter evaluates this library.
+    // Restore executable Go ELF files from the strip task's verified inputs;
+    // library-only keepDebugSymbols does not protect the final APK/AAB.
+    plugins.withId('com.android.application') {
+        tasks.matching { it.name.startsWith('strip') && it.name.endsWith('DebugSymbols') }.configureEach { stripTask ->
+            doLast {
+                copy {
+                    from stripTask.inputDir
+                    into stripTask.outputDir
+                    include '**/libxray.so', '**/libmihomo.so'
+                }
+            }
+        }
+    }
+}
+android {
+    namespace 'dev.sever.vpn'
+    compileSdk 35
+    defaultConfig {
+        minSdk 26
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+    sourceSets { main.java.srcDirs += 'src/main/kotlin' }
+    packagingOptions { jniLibs { useLegacyPackaging = true; keepDebugSymbols += ['**/libxray.so', '**/libmihomo.so'] } }
+}
+dependencies {
+    implementation(name: 'libbox', ext: 'aar')
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1'
+}
+
+tasks.register('verifyLibbox') {
+    doLast {
+        def aar = file('libs/libbox.aar')
+        if (!aar.exists()) throw new GradleException('Run python scripts/fetch_core.py android before building')
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        aar.withInputStream { stream ->
+            byte[] buf = new byte[1048576]
+            int n
+            while ((n = stream.read(buf)) > 0) digest.update(buf, 0, n)
+        }
+        def actual = digest.digest().encodeHex().toString()
+        if (actual != '13fbeabcb4622250762afa1b137daaba861a4dc1875643d18621339912f32330') {
+            throw new GradleException('libbox.aar SHA-256 mismatch. Use the pinned release asset.')
+        }
+    }
+}
+tasks.register('verifyXray') {
+    doLast {
+        def expected = [
+            'arm64-v8a': '19101a8191d6d606da975f719c8cdb80b8710b87ab17edc00ef74b9e39588714',
+            'x86_64': '26b2ac1e596242847a247df9e932ac480bf6072c5c686517f5a3017320895814'
+        ]
+        expected.each { abi, checksum ->
+            def binary = file("src/main/jniLibs/${abi}/libxray.so")
+            if (!binary.exists()) throw new GradleException('Run python scripts/fetch_core.py android before building')
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            binary.withInputStream { stream ->
+                byte[] buf = new byte[1048576]
+                int n
+                while ((n = stream.read(buf)) > 0) digest.update(buf, 0, n)
+            }
+            if (digest.digest().encodeHex().toString() != checksum) throw new GradleException("Xray SHA-256 mismatch for ${abi}")
+        }
+    }
+}
+tasks.register('verifyMihomo') {
+    doLast {
+        def expected = [
+            'arm64-v8a': 'bb9afbd48717f92d59e07da35fb694b83d40d6edb63eb9033c2ee4174137d195',
+            'x86_64': '1c5aa8e8a7006e4093560fe48505fd1587de29210879e806822cb1094b334413',
+            'armeabi-v7a': '10e85ebad5380e5cdcb4028b6ba40910593bc9c37ce6b50e9f3a21adfca1408d'
+        ]
+        expected.each { abi, checksum ->
+            def binary = file("src/main/jniLibs/${abi}/libmihomo.so")
+            if (!binary.exists()) throw new GradleException('Run python scripts/fetch_core.py android before building')
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            binary.withInputStream { stream ->
+                byte[] buf = new byte[1048576]
+                int n
+                while ((n = stream.read(buf)) > 0) digest.update(buf, 0, n)
+            }
+            if (digest.digest().encodeHex().toString() != checksum) throw new GradleException("Mihomo SHA-256 mismatch for ${abi}")
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'verifyLibbox', 'verifyXray', 'verifyMihomo' }

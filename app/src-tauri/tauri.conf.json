@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lunaris client",
+  "version": "0.6.5",
+  "identifier": "dev.sever.sever-client",
+  "build": {"frontendDist": "../ui"},
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{"label": "main", "title": "Lunaris client", "width": 1120, "height": 800, "minWidth": 360, "minHeight": 560}],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/128x128.png", "icons/128x128@2x.png"],
+    "resources": {"../../build/tauri-runtime-rust/": "runtime/"},
+    "android": {"minSdkVersion": 26, "versionCode": 26}
+  }
+}

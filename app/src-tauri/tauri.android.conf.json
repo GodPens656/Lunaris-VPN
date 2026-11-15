@@ -1,0 +1,4 @@
+{
+  "bundle": {"resources": []},
+  "app": {"windows": [{"label": "main", "title": "Lunaris client", "width": 420, "height": 840}]}
+}

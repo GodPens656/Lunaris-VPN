@@ -1,0 +1,3 @@
+-keep class go.** { *; }
+-keep class io.nekohasekai.** { *; }
+

@@ -1,0 +1,4 @@
+-keep class dev.sever.vpn.** { *; }
+-keep class io.nekohasekai.** { *; }
+-keep class go.** { *; }
+-keep class com.chaquo.** { *; }

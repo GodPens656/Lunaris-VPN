@@ -1,0 +1,28 @@
+[package]
+name = "lunaris-vpn"
+version = "0.6.5"
+edition = "2021"
+description = "Lunaris client"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "lunaris_vpn_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+lunaris-backend = { path = "../backend" }
+tauri-plugin-lunaris-native = { path = "../plugins/lunaris-native" }
+
+[target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 8
