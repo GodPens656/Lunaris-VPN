@@ -4,6 +4,19 @@ use crate::{
 };
 use serde_json::{json, Value};
 pub const RUSSIAN_SUFFIXES: [&str; 3] = ["xn--p1ai", "su", "ru"];
+fn direct_domains(settings: &Settings) -> Result<Vec<String>> {
+    let mut domains: Vec<String> = if settings.bypass_russian_domains {
+        RUSSIAN_SUFFIXES.iter().map(|s| s.to_string()).collect()
+    } else {
+        Vec::new()
+    };
+    for domain in settings.normalized_bypass_domains()? {
+        if !domains.contains(&domain) {
+            domains.push(domain);
+        }
+    }
+    Ok(domains)
+}
 fn s<'a>(v: &'a Value, k: &str, default: &'a str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or(default)
 }
@@ -55,8 +68,9 @@ pub fn sing_box(
         json!({"protocol":"dns","action":"hijack-dns"}),
     ];
     let mut direct = json!({"type":"direct","tag":"direct"});
-    if settings.bypass_russian_domains {
-        rules.push(json!({"domain_suffix":RUSSIAN_SUFFIXES,"action":"route","outbound":"direct"}));
+    let domains = direct_domains(settings)?;
+    if !domains.is_empty() {
+        rules.push(json!({"domain_suffix":domains,"action":"route","outbound":"direct"}));
         direct["domain_resolver"] = json!("remote");
     }
     if p.requires_xray() && !android {
@@ -351,8 +365,9 @@ pub fn mihomo(
     if settings.ipv6 {
         c["tun"]["inet6-address"] = json!(["fdfe:dcba:9876::1/126"]);
     }
-    if settings.bypass_russian_domains {
-        let mut rules = RUSSIAN_SUFFIXES
+    let domains = direct_domains(settings)?;
+    if !domains.is_empty() {
+        let mut rules = domains
             .iter()
             .map(|s| format!("DOMAIN-SUFFIX,{s},DIRECT"))
             .collect::<Vec<_>>();

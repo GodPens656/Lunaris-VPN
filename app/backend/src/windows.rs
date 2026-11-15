@@ -825,6 +825,24 @@ impl Host for WindowsHost {
         let directory = self.directory.parent().unwrap_or(&self.directory);
         take_import_link(directory)
     }
+    async fn open_update_url(&self, url: &str) -> Result<()> {
+        crate::updates::validate_download_url(url)?;
+        let url = wide(url);
+        let result = unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                wide("open").as_ptr(),
+                url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+            )
+        };
+        if result as isize <= 32 {
+            return Err("Не удалось открыть браузер для скачивания обновления.".into());
+        }
+        Ok(())
+    }
     async fn probe(&self, p: &Profile, s: &Settings) -> Latency {
         let directory = self
             .directory

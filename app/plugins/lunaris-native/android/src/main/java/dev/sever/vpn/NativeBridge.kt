@@ -129,6 +129,7 @@ class NativeBridge(private val activity: Activity) {
                     "vault_unavailable" -> "Защищённое хранилище Android недоступно."
                     "permission_denied" -> "Разрешение VPN не выдано. Проверьте режим постоянной VPN другого клиента."
                     "stop_timeout" -> "VPN-служба не подтвердила отключение. Повторите попытку."
+                    "update_download_unavailable" -> "Не удалось открыть браузер для скачивания обновления."
                     else -> "Android VPN-служба недоступна. Повторите попытку."
                 }
                 future.complete(JSONObject().put("error", safe).toString())
@@ -188,6 +189,25 @@ class NativeBridge(private val activity: Activity) {
                     }
                     result.success(Base64.encodeToString(output, Base64.NO_WRAP))
                 } catch (_: Exception) { result.error("vault_unavailable", "Protected storage unavailable", null) }
+            }
+            "open_update_url" -> {
+                val url = call.argument<String>("url") ?: ""
+                val uri = android.net.Uri.parse(url)
+                if (!url.startsWith("https://github.com/GodPens656/Lunaris-VPN/releases/download/") ||
+                    uri.scheme != "https" || uri.host != "github.com" || uri.port != -1 ||
+                    uri.userInfo != null || uri.query != null || uri.fragment != null ||
+                    uri.pathSegments.size != 6 || url.any { it.isWhitespace() || it.isISOControl() }) {
+                    result.error("update_download_unavailable", "Invalid release URL", null)
+                    return
+                }
+                try {
+                    activity.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                    })
+                    result.success(null)
+                } catch (_: Exception) {
+                    result.error("update_download_unavailable", "Browser unavailable", null)
+                }
             }
             "snapshot" -> {
                 pendingSnapshots.add(result)

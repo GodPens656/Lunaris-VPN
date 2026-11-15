@@ -3,7 +3,7 @@
   "version": "0.6.5",
   "private": true,
   "scripts": {
-    "test": "node --test ../tests/ui_settings.test.cjs ../tests/ui_background.test.cjs",
+    "test": "node --test ../tests/ui_settings.test.cjs ../tests/ui_background.test.cjs tests/ui_routing.test.cjs tests/ui_updates.test.cjs",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build --no-bundle",

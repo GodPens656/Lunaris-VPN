@@ -8,6 +8,7 @@ pub mod parser;
 pub mod redaction;
 pub mod storage;
 pub mod subscriptions;
+pub mod updates;
 #[cfg(windows)]
 pub mod windows;
 

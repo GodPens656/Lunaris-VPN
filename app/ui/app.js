@@ -6,6 +6,7 @@ const paths = {
  servers:'<rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M12 6.5h4M12 17.5h4"/>',
  link:'<path d="m10 13 4-4m-7 6-1 1a4 4 0 0 0 6 6l4-4a4 4 0 0 0 0-6M17 9l1-1a4 4 0 0 0-6-6L8 6a4 4 0 0 0 0 6" transform="translate(0 0) scale(.92)"/>',
  settings:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--surface)"/><circle cx="15" cy="12" r="2" fill="var(--surface)"/><circle cx="9" cy="18" r="2" fill="var(--surface)"/>',
+ routing:'<path d="M12 8v5M5 16v-3h14v3"/><circle cx="12" cy="5" r="3"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/>',
  log:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
  moon:'<path d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/>',
  plus:'<path d="M12 5v14M5 12h14"/>', refresh:'<path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
@@ -30,6 +31,7 @@ let customDns = false;
 const statusNames = {disconnected:'Отключено',connecting:'Подключается…',connected:'Подключено',disconnecting:'Отключается…',error:'Ошибка подключения'};
 let state = null, tab = 'home', busy = false, search = '', source = 'all', bulkMethod = 'tcp', lastSignature = '', toastTimer, dialogSubmit, startupSeen = false;
 let subscriptionsBusy = false;
+let appUpdateChecking=false,appUpdateCheckedAt=null,pendingAppUpdate=null,appUpdatePromptedVersion=null;
 const subscriptionRequests = new Set();
 const settingsDrafts = new Map(), settingsTimers = new Map();
 let settingsSaveQueue = Promise.resolve(), settingsSaving = 0;
@@ -155,7 +157,26 @@ function selectDnsPreset(id){
  if($('#dns-fields'))$('#dns-fields').innerHTML=dnsFields();
  updateSettingsSaveStatus();
 }
-function settings(){const a=state.platform==='android';return `<form id="settings-form">${section('Подключение','shield',`<div class="field-grid">${!a?select('Режим','mode',connectionModes):''}${select('Ядро','core',[['sing-box','sing-box / Xray'],['mihomo','Mihomo']])}${!a?input('Порт прокси','mixed_port','number')+input('Порт управления','api_port','number'):''}</div>${check('IPv6','ipv6')}${check('Напрямую для доменов .ru, .su и .рф','bypass_russian_domains','DNS остаётся через VPN. Применится при следующем подключении.')}${check('Проверять HTTPS при подключении','verify_connection','Подтверждает доступ к интернету перед статусом «Подключено».')}${select('Способ проверки задержки','latency_method',latencyMethods)}${input('Адрес проверки HTTPS','probe_url','url')}${!a?input('Путь к sing-box (необязательно)','core_path')+input('Путь к Mihomo (необязательно)','mihomo_path')+'<p class="helper">Режим TUN требует запуска приложения от имени администратора.</p>':''}`,true)}${section('Серверы','servers',check('Автосортировка по пингу','auto_sort_ping','Меньший пинг выше; недоступные и непроверенные серверы в конце.'))}${!a?section('Окно и трей','settings',`${check('Сворачивать в трей','minimize_to_tray','При нажатии кнопки сворачивания окно скрывается в трей.')}${check('Оставлять в трее при закрытии окна','close_to_tray','VPN продолжает работать. Для завершения выберите «Выход» в меню трея.')}<p class="helper">Нажмите значок в трее, чтобы открыть приложение; правая кнопка открывает меню управления.</p>`):''}${section('DNS','servers',dnsSettings())}${section('Обновление подписок','link',`${check('Обновлять при запуске','update_on_start')}${input('Интервал обновления, минуты','update_minutes','number','0 — автоматическое обновление выключено.')}`)}<div class="settings-footer"><span id="settings-save-status" class="helper" role="status" aria-live="polite">Настройки сохраняются автоматически.</span><span class="helper">Изменения подключения применятся при следующем сеансе.</span></div></form>${section('Внешний вид','moon','<p class="muted">Тема, цвет и оформление приложения.</p>'+btn('Настроить оформление','appearance','moon'))}<p class="muted">Lunaris client 0.6.5 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;}
+function routingSettings(){
+ const value=settingValue('bypass_domains')??[],text=Array.isArray(value)?value.join('\n'):value;
+ return `${check('Напрямую для доменов .ru, .su и .рф','bypass_russian_domains')}
+ <label class="field">Свои домены в обход VPN<textarea name="bypass_domains" rows="6" placeholder="example.com&#10;пример.рф" spellcheck="false" autocapitalize="none" autocomplete="off" ${settingAttributes('bypass_domains')}>${esc(text)}</textarea><span class="helper">По одному домену на строку, без https:// и путей. Домен и все его поддомены будут открываться напрямую. Чтобы убрать обход, удалите домен из списка.</span>${settingError('bypass_domains')}</label>
+ <p class="helper">Список работает независимо от переключателя зон. DNS остаётся через VPN. Изменения сохраняются автоматически и применятся при следующем подключении.</p>`;
+}
+function settings(){
+ const a=state.platform==='android';
+ return `<form id="settings-form">
+ ${section('Подключение','shield',`<div class="field-grid">${!a?select('Режим','mode',connectionModes):''}${select('Ядро','core',[['sing-box','sing-box / Xray'],['mihomo','Mihomo']])}${!a?input('Порт прокси','mixed_port','number')+input('Порт управления','api_port','number'):''}</div>${check('IPv6','ipv6')}${check('Проверять HTTPS при подключении','verify_connection','Подтверждает доступ к интернету перед статусом «Подключено».')}${select('Способ проверки задержки','latency_method',latencyMethods)}${input('Адрес проверки HTTPS','probe_url','url')}${!a?input('Путь к sing-box (необязательно)','core_path')+input('Путь к Mihomo (необязательно)','mihomo_path')+'<p class="helper">Режим TUN требует запуска приложения от имени администратора.</p>':''}`)}
+ ${section('Маршрутизация','routing',routingSettings())}
+ ${section('Серверы','servers',check('Автосортировка по пингу','auto_sort_ping','Меньший пинг выше; недоступные и непроверенные серверы в конце.'))}
+ ${!a?section('Окно и трей','settings',`${check('Сворачивать в трей','minimize_to_tray','При нажатии кнопки сворачивания окно скрывается в трей.')}${check('Оставлять в трее при закрытии окна','close_to_tray','VPN продолжает работать. Для завершения выберите «Выход» в меню трея.')}<p class="helper">Нажмите значок в трее, чтобы открыть приложение; правая кнопка открывает меню управления.</p>`):''}
+ ${section('DNS','servers',dnsSettings())}
+ ${section('Обновление подписок','link',`${check('Обновлять при запуске','update_on_start')}${input('Интервал обновления, минуты','update_minutes','number','0 — автоматическое обновление выключено.')}`)}
+ ${section('Обновление приложения','refresh',`<p class="helper">Новые версии проверяются при запуске. Источник: GitHub · GodPens656/Lunaris-VPN.</p>${btn('Проверить обновление','check-app-update','refresh')}`)}
+ <div class="settings-footer"><span id="settings-save-status" class="helper" role="status" aria-live="polite">Настройки сохраняются автоматически.</span><span class="helper">Изменения подключения применятся при следующем сеансе.</span></div></form>
+ ${section('Внешний вид','moon','<p class="muted">Тема, цвет и оформление приложения.</p>'+btn('Настроить оформление','appearance','moon'))}
+ <p class="muted">Lunaris client 0.6.5 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;
+}
 function logs(){return `<div class="section-heading"><h2>Журнал подключения</h2></div><p class="muted" style="margin-bottom:16px">Последние 300 записей. Ссылки, пароли и ключи скрыты. Журнал хранится в памяти.</p><div class="card log" id="log-lines">${esc(state.logs.join('\n') || 'Записей пока нет.')}</div>`;}
 function render(){
  $('#desktop-nav').innerHTML=navHtml();$('#mobile-nav').innerHTML=navHtml();$('#page-title').textContent=nav.find(n=>n[0]===tab)?.[1]||'Подключение';
@@ -168,6 +189,8 @@ function render(){
 function signature(){return state?JSON.stringify([state.profiles,state.subscriptions,state.selected,state.latency,state.measuring,state.settings.auto_sort_ping,state.error,state.subscriptions.map(s=>{const expiry=subscriptionExpiry(s);return expiry?[expiry.status,expiry.status==='soon'?expiry.days:0]:null;})]):'';}
 function updateStatus(){
  if(!state)return;const s=state.status,running=['connected','connecting','disconnecting'].includes(s);
+ const updateButton=$('[data-action="check-app-update"]');
+ if(updateButton){updateButton.disabled=appUpdateChecking;updateButton.setAttribute('aria-busy',String(appUpdateChecking));}
  for(const button of document.querySelectorAll('[data-action="update-all"], [data-action="update-subscription"]')){
   button.disabled=subscriptionsBusy;button.setAttribute('aria-busy',String(subscriptionsBusy));
  }
@@ -220,7 +243,7 @@ function queueSettings(entries){
  // Save patches in order; a newer edit may supersede a patch before it starts.
  settingsSaveQueue=settingsSaveQueue.then(async()=>{
   const current=entries.filter(([key,draft])=>settingsDrafts.get(key)===draft);
-  const patch=Object.fromEntries(current.filter(([key,draft])=>draft.value!==state.settings[key]).map(([key,draft])=>[key,draft.value]));
+  const patch=Object.fromEntries(current.filter(([key,draft])=>JSON.stringify(draft.value)!==JSON.stringify(state.settings[key])).map(([key,draft])=>[key,draft.value]));
   try{
    if(Object.keys(patch).length)accept(await rpc('settings',patch));
    for(const [key,draft] of current)if(settingsDrafts.get(key)===draft){settingsDrafts.delete(key);showSettingError(key,'');}
@@ -233,7 +256,8 @@ function editSetting(control,immediate=false){
  const key=control.name;if(!['settings-form','sort-form'].includes(control.form?.id)||!state||!(key in state.settings))return;
  const pending=settingsTimers.get(key);if(pending){clearTimeout(pending.timer);settingsTimers.delete(key);}
  const raw=control.type==='checkbox'?control.checked:control.value;
- const draft={raw,value:typeof state.settings[key]==='number'?Number(raw):raw,error:''};
+ const value=key==='bypass_domains'?raw.split(/\r?\n/).map(domain=>domain.trim()).filter(Boolean):typeof state.settings[key]==='number'?Number(raw):raw;
+ const draft={raw,value,error:''};
  settingsDrafts.set(key,draft);showSettingError(key,'');
  if(!control.checkValidity()){
   draft.error=control.validationMessage;showSettingError(key,draft.error);return;
@@ -249,10 +273,32 @@ async function flushSettings(){
   queue=settingsSaveQueue;await queue;
  }while(settingsTimers.size||queue!==settingsSaveQueue);
 }
-function openDialog(title,body,submit,label='Добавить'){
+function openDialog(title,body,submit,label='Добавить',cancelLabel='Отмена'){
  $('#dialog-title').textContent=title;$('#dialog-body').innerHTML=body;$('#dialog-error').textContent='';
- $('#dialog-actions').innerHTML=submit?`<button type="button" class="button" data-action="close-dialog">Отмена</button><button class="button primary" type="submit">${esc(label)}</button>`:btn('Готово','close-dialog');dialogSubmit=submit;
+ $('#dialog-actions').innerHTML=submit?`<button type="button" class="button" data-action="close-dialog">${esc(cancelLabel)}</button><button class="button primary" type="submit">${esc(label)}</button>`:btn('Готово','close-dialog');dialogSubmit=submit;
  if(!$('#dialog').open)$('#dialog').showModal();
+}
+function showAppUpdate(){
+ if(!pendingAppUpdate||$('#dialog').open||document.hidden)return;
+ const update=pendingAppUpdate;pendingAppUpdate=null;
+ if(update.version===appUpdatePromptedVersion)return;
+ appUpdatePromptedVersion=update.version;
+ const android=state.platform==='android';
+ openDialog('Доступно обновление',`<p>Вышла версия <strong>${esc(update.version)}</strong>. У вас установлена ${esc(update.current_version)}.</p><p class="helper">${esc(update.asset_name)} · ${bytes(update.size)}</p><p class="muted">Скачивание начнётся в системном браузере. ${android?'После загрузки откройте APK, чтобы обновить приложение.':'После загрузки распакуйте весь ZIP-архив и запустите новую версию приложения.'}</p>`,async()=>{
+  await flushSettings();await rpc('download_app_update',{version:update.version});toast('Загрузка обновления открыта в браузере.');
+ },'Скачать','Позже');
+}
+async function checkAppUpdate(manual=false){
+ if(!state||!native()||appUpdateChecking||(!manual&&appUpdateCheckedAt!==null&&Date.now()-appUpdateCheckedAt<3600000))return;
+ appUpdateChecking=true;appUpdateCheckedAt=Date.now();updateStatus();
+ try{
+  const update=await rpc('check_app_update');
+  if(update&&typeof update.version==='string'&&typeof update.asset_name==='string'){
+   if(manual)appUpdatePromptedVersion=null;
+   pendingAppUpdate=update;showAppUpdate();
+  }else{pendingAppUpdate=null;if(manual)toast('Новых версий для вашей платформы нет.');}
+ }catch(e){if(manual)toast(typeof e==='string'?e:e.message||'Не удалось проверить обновление.');}
+ finally{appUpdateChecking=false;updateStatus();}
 }
 function importDialog(){openDialog('Добавить сервер',`<div class="dialog-tabs">${btn('Подписка','subscription','link')}${btn('Вставить серверы','manual','servers',true)}</div><label class="field">Ссылки или JSON<textarea name="text" required placeholder="vless://…&#10;trojan://…&#10;hysteria2://…" spellcheck="false"></textarea></label><p class="helper">Поддерживаются несколько ссылок, Base64-подписки и локальная JSON-конфигурация sing-box.</p>`,async form=>{const result=await action('import',{text:form.get('text')});toast(`Импортировано: ${result.imported}. Отклонено: ${result.rejected.length}. Дубликаты: ${result.duplicates}.`);},'Импортировать');}
 function subscriptionDialog(url=''){openDialog('Добавить подписку',`<div class="dialog-tabs">${btn('Подписка','subscription','link',true)}${btn('Вставить серверы','manual','servers')}</div><label class="field">Ссылка на подписку<input name="url" required value="${esc(url)}" placeholder="https://…" spellcheck="false" autocomplete="off"></label><label class="field">Название (необязательно)<input name="name" placeholder="Определится автоматически" maxlength="120"></label><p class="helper">Ссылка сохраняется в защищённом хранилище. При добавлении подписка будет загружена.</p>`,async form=>{await action('add_subscription',{url:form.get('url'),name:form.get('name')});toast('Подписка добавлена.');});}
@@ -281,6 +327,7 @@ document.addEventListener('click',async e=>{
  if(target.dataset.themeChoice){appearance.theme=target.dataset.themeChoice;applyAppearance();appearanceDialog();return;}
  if(target.dataset.color){appearance.accent=target.dataset.color;applyAppearance();return;}
  const a=target.dataset.action;
+ if(a==='check-app-update'){await checkAppUpdate(true);return;}
  if(a==='tray'){try{await flushSettings();await native()('hide_to_tray');}catch(e){toast(typeof e==='string'?e:e.message);}return;}
  if(a==='retry'){try{accept(await rpc('snapshot'));}catch(e){toast(typeof e==='string'?e:e.message);}return;}
  if(['import','manual'].includes(a)){importDialog();return;}if(a==='subscription'){subscriptionDialog();return;}if(a==='appearance'){appearanceDialog();return;}if(a==='close-dialog'){$('#dialog').close();return;}
@@ -306,12 +353,13 @@ let lastLinkPoll=0;
 async function poll(){
  try{
   if(!busy)accept(await rpc('snapshot'));
-  if(state&&!startupSeen){startupSeen=true;if(!state.profiles.length&&!state.subscriptions.length&&!$('#dialog').open)subscriptionDialog();}
+  if(state&&!startupSeen){startupSeen=true;checkAppUpdate();if(!state.profiles.length&&!state.subscriptions.length&&!$('#dialog').open)subscriptionDialog();}
+  if(state)showAppUpdate();
   if(state&&!busy&&!$('#dialog').open&&Date.now()-lastLinkPoll>5000){lastLinkPoll=Date.now();const link=await rpc('take_import_link');if(link)subscriptionDialog(link);}
  }catch(e){if(!state){$('#status-pill').textContent='Недоступно';$('#view').innerHTML=`<div class="empty">${icon('shield')}<h3>${native()?'Не удалось открыть приложение':'Предпросмотр интерфейса'}</h3><p>${esc(typeof e==='string'?e:e.message)}</p>${btn('Повторить','retry','refresh',true)}</div>`;}}
  finally{setTimeout(poll,1200);}
 }
-document.addEventListener('visibilitychange',()=>{if(document.hidden)flushSettings();else if(state&&!busy)rpc('snapshot').then(accept).catch(()=>{});});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)flushSettings();else if(state){checkAppUpdate();showAppUpdate();if(!busy)rpc('snapshot').then(accept).catch(()=>{});}});
 window.addEventListener('pagehide',()=>{flushSettings();});
 if(window.__TAURI__?.event?.listen){
  window.__TAURI__.event.listen('desktop-navigate',event=>{navigate(event.payload);}).catch(()=>{});

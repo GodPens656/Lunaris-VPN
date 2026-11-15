@@ -82,6 +82,7 @@ pub struct Settings {
     pub core: String,
     pub mihomo_path: String,
     pub bypass_russian_domains: bool,
+    pub bypass_domains: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -106,10 +107,48 @@ impl Default for Settings {
             core: "sing-box".into(),
             mihomo_path: String::new(),
             bypass_russian_domains: false,
+            bypass_domains: Vec::new(),
         }
     }
 }
 impl Settings {
+    pub fn normalized_bypass_domains(&self) -> Result<Vec<String>> {
+        let mut domains = Vec::new();
+        for value in &self.bypass_domains {
+            let raw = value.trim();
+            let invalid = || {
+                format!("Некорректный домен «{value}». Введите домен без ссылки, пути, порта и маски, например example.com.")
+            };
+            if raw.is_empty()
+                || raw.chars().any(|c| {
+                    c.is_whitespace() || c.is_control() || "/\\:@?#%*[],;".contains(c)
+                })
+            {
+                return Err(invalid());
+            }
+            let url::Host::Domain(domain) = url::Host::parse(raw).map_err(|_| invalid())? else {
+                return Err(invalid());
+            };
+            let domain = domain.strip_suffix('.').unwrap_or(&domain);
+            if domain.len() > 253
+                || !domain.contains('.')
+                || domain.split('.').any(|label| {
+                    label.is_empty()
+                        || label.len() > 63
+                        || label.starts_with('-')
+                        || label.ends_with('-')
+                        || !label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                })
+            {
+                return Err(invalid());
+            }
+            if !domains.iter().any(|existing| existing == domain) {
+                domains.push(domain.to_string());
+            }
+        }
+        Ok(domains)
+    }
+
     pub fn validate(&self) -> Result<()> {
         if !matches!(self.core.as_str(), "sing-box" | "mihomo") {
             return Err("Неизвестное ядро подключения.".into());
@@ -154,6 +193,7 @@ impl Settings {
                 "Адрес проверки соединения должен быть HTTPS URL без учётных данных.".into(),
             );
         }
+        self.normalized_bypass_domains()?;
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ use crate::{
     parser,
     redaction::SafeLog,
     storage::Repository,
-    subscriptions, Result,
+    subscriptions, updates, Result,
 };
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
@@ -36,6 +36,9 @@ pub trait Host: Send + Sync {
     async fn take_import_link(&self) -> Result<Value> {
         Ok(Value::Null)
     }
+    async fn open_update_url(&self, _url: &str) -> Result<()> {
+        Err("Не удалось открыть загрузку обновления.".into())
+    }
     async fn probe(&self, _profile: &Profile, _settings: &Settings) -> Latency {
         Latency::error("Проверка через прокси недоступна")
     }
@@ -64,6 +67,8 @@ pub struct Engine {
     scheduler: Mutex<Option<JoinHandle<()>>>,
     monitor: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
+    available_update: Mutex<Option<updates::Update>>,
+    update_check_gate: Mutex<()>,
 }
 impl Engine {
     pub async fn new(directory: PathBuf, host: Arc<dyn Host>, log: Log) -> Result<Arc<Self>> {
@@ -94,6 +99,8 @@ impl Engine {
             scheduler: Mutex::new(None),
             monitor: Mutex::new(None),
             closed: AtomicBool::new(false),
+            available_update: Mutex::new(None),
+            update_check_gate: Mutex::new(()),
         });
         let weak = Arc::downgrade(&e);
         let startup = {
@@ -387,6 +394,28 @@ impl Engine {
         if method == "take_import_link" {
             return self.host.take_import_link().await;
         }
+        if method == "check_app_update" {
+            let _check = self.update_check_gate.lock().await;
+            let update = updates::check(self.host.android()).await?;
+            let value = serde_json::to_value(&update)
+                .map_err(|_| "Не удалось прочитать сведения об обновлении.")?;
+            *self.available_update.lock().await = update;
+            return Ok(value);
+        }
+        if method == "download_app_update" {
+            let update = self
+                .available_update
+                .lock()
+                .await
+                .clone()
+                .ok_or("Сначала проверьте наличие обновления приложения.")?;
+            if args["version"].as_str() != Some(update.version.as_str()) {
+                return Err("Версия обновления изменилась. Проверьте обновление ещё раз.".into());
+            }
+            updates::validate_download_url(&update.download_url)?;
+            self.host.open_update_url(&update.download_url).await?;
+            return Ok(Value::Null);
+        }
         if method == "shutdown" {
             self.shutdown().await?;
             return Ok(self.snapshot().await);
@@ -555,6 +584,7 @@ impl Engine {
                 }
                 state.settings =
                     serde_json::from_value(settings).map_err(|_| "Некорректный тип настройки.")?;
+                state.settings.bypass_domains = state.settings.normalized_bypass_domains()?;
                 state.settings.validate()?;
                 i.repo.commit(state).await?;
                 drop(i);
@@ -711,6 +741,10 @@ impl Host for AndroidHost {
     }
     async fn take_import_link(&self) -> Result<Value> {
         self.invoke("take_import_link", json!({})).await
+    }
+    async fn open_update_url(&self, url: &str) -> Result<()> {
+        self.invoke("open_update_url", json!({"url":url})).await?;
+        Ok(())
     }
 }
 impl AndroidHost {

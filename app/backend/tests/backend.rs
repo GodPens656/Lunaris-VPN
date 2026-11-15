@@ -129,6 +129,167 @@ fn android_sidecars_use_local_binding_gvisor_and_routing() {
     );
     assert_eq!(settings.core, "mihomo");
 }
+
+#[test]
+fn custom_bypass_domains_normalize_idna_and_reject_non_domains() {
+    let old: Settings = serde_json::from_value(json!({})).unwrap();
+    assert!(old.bypass_domains.is_empty());
+    let mut settings = Settings {
+        bypass_domains: vec![
+            " Example.COM. ".into(),
+            "пример.рф".into(),
+            "example.com".into(),
+            "xn--e1afmkfd.xn--p1ai".into(),
+        ],
+        ..Default::default()
+    };
+    assert_eq!(
+        settings.normalized_bypass_domains().unwrap(),
+        vec!["example.com", "xn--e1afmkfd.xn--p1ai"]
+    );
+    for domain in [
+        "",
+        "https://example.com",
+        "example.com/path",
+        "example.com:443",
+        "*.example.com",
+        ".example.com",
+        "example..com",
+        "example.com..",
+        "example.com,other.com",
+        "example.com;DIRECT",
+        "user@example.com",
+        "127.0.0.1",
+        "[::1]",
+        "localhost",
+        "bad_domain.com",
+        "-bad.com",
+        "bad-.com",
+        "bad domain.com",
+        "example.com\nother.com",
+        "%65xample.com",
+    ] {
+        settings.bypass_domains = vec![domain.into()];
+        assert!(settings.validate().is_err(), "accepted {domain:?}");
+    }
+    for domain in [
+        format!("{}.com", "x".repeat(64)),
+        format!("{}.com", "abcd.".repeat(51)),
+    ] {
+        settings.bypass_domains = vec![domain];
+        assert!(settings.validate().is_err());
+    }
+}
+
+#[test]
+fn custom_bypass_routes_work_alone_and_with_russian_zones_on_both_platforms() {
+    let profile = parser::parse_uri(uri(), None).unwrap();
+    for russian in [false, true] {
+        for core in ["sing-box", "mihomo"] {
+            let settings = Settings {
+                core: core.into(),
+                bypass_russian_domains: russian,
+                bypass_domains: vec!["Example.COM".into(), "пример.рф".into()],
+                ..Default::default()
+            };
+            let mut expected = if russian {
+                vec!["xn--p1ai", "su", "ru"]
+            } else {
+                vec![]
+            };
+            expected.extend(["example.com", "xn--e1afmkfd.xn--p1ai"]);
+            let sing = config::sing_box(&profile, &settings, "api", false, None, None).unwrap();
+            let android = config::android(&profile, &settings, "api", "local").unwrap();
+            let xray = parser::parse_uri(&format!("{}&mode=multi", uri()), None).unwrap();
+            let bridge = config::android(&xray, &settings, "api", "local").unwrap();
+            for config in [&sing, &android, &bridge] {
+                assert_eq!(config["route"]["rules"][2]["domain_suffix"], json!(expected));
+                assert_eq!(config["route"]["rules"][2]["outbound"], "direct");
+                assert_eq!(config["route"]["final"], "proxy");
+                assert_eq!(config["outbounds"][1]["domain_resolver"], "remote");
+                assert_eq!(config["dns"]["servers"][1]["detour"], "proxy");
+            }
+            let mihomo = config::mihomo(&profile, &settings, "api", None).unwrap();
+            let mut rules: Vec<_> = expected
+                .iter()
+                .map(|s| format!("DOMAIN-SUFFIX,{s},DIRECT"))
+                .collect();
+            rules.push("MATCH,proxy".into());
+            assert_eq!(mihomo["rules"], json!(rules));
+            assert_eq!(mihomo["sniffer"]["enable"], true);
+            if core == "mihomo" {
+                assert_eq!(android["sever_mihomo"]["rules"], json!(rules));
+            }
+        }
+    }
+    let settings = Settings::default();
+    let sing = config::sing_box(&profile, &settings, "api", false, None, None).unwrap();
+    assert_eq!(sing["route"]["rules"].as_array().unwrap().len(), 2);
+    let mihomo = config::mihomo(&profile, &settings, "api", None).unwrap();
+    assert_eq!(mihomo["rules"], json!(["MATCH,proxy"]));
+    assert!(mihomo.get("sniffer").is_none());
+}
+
+#[tokio::test]
+async fn custom_bypass_settings_persist_rollback_and_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Fake::default());
+    let engine = Engine::new(
+        dir.path().into(),
+        host.clone(),
+        Arc::new(Mutex::new(Default::default())),
+    )
+    .await
+    .unwrap();
+    engine
+        .dispatch(
+            "settings",
+            json!({"bypass_domains":["Example.COM.","пример.рф","example.com"]}),
+        )
+        .await
+        .unwrap();
+    let saved = engine.snapshot().await["settings"].clone();
+    assert_eq!(
+        saved["bypass_domains"],
+        json!(["example.com", "xn--e1afmkfd.xn--p1ai"])
+    );
+    for patch in [
+        json!({"bypass_domains":"example.com"}),
+        json!({"bypass_domains":[1]}),
+        json!({"bypass_domains":null}),
+        json!({"bypass_domains":["valid.com","https://invalid.com"]}),
+    ] {
+        assert!(engine.dispatch("settings", patch).await.is_err());
+        assert_eq!(engine.snapshot().await["settings"], saved);
+    }
+    host.fail.store(true, Ordering::SeqCst);
+    assert!(engine
+        .dispatch("settings", json!({"bypass_domains":[]}))
+        .await
+        .is_err());
+    assert_eq!(engine.snapshot().await["settings"], saved);
+    host.fail.store(false, Ordering::SeqCst);
+    engine.shutdown().await.unwrap();
+    drop(engine);
+    let repo = Repository::open(dir.path().into(), host.clone()).await.unwrap();
+    assert_eq!(serde_json::to_value(&repo.state.settings).unwrap(), saved);
+    drop(repo);
+    let engine = Engine::new(
+        dir.path().into(),
+        host.clone(),
+        Arc::new(Mutex::new(Default::default())),
+    )
+    .await
+    .unwrap();
+    engine
+        .dispatch("settings", json!({"bypass_domains":[]}))
+        .await
+        .unwrap();
+    engine.shutdown().await.unwrap();
+    drop(engine);
+    let repo = Repository::open(dir.path().into(), host).await.unwrap();
+    assert!(repo.state.settings.bypass_domains.is_empty());
+}
 #[test]
 fn replacement_requires_unique_logical_server() {
     let p = parser::parse_uri("trojan://old@example.com#One", Some("source")).unwrap();
