@@ -25,15 +25,18 @@ pub fn validate_url(value: &str) -> Result<url::Url> {
     Ok(u)
 }
 pub fn subscription_url(link: &str) -> Result<String> {
-    let prefix = "lunaris://import://";
     let error = "Некорректная ссылка импорта. Нужна lunaris://import://https://адрес-подписки.";
-    if link.len() > 25000
-        || !link
-            .get(..prefix.len())
-            .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
-    {
+    if link.len() > 25000 {
         return Err(error.into());
     }
+    // Browsers parse `import:` as a host with an empty port and remove its colon.
+    let prefix = ["lunaris://import://", "lunaris://import//"]
+        .into_iter()
+        .find(|prefix| {
+            link.get(..prefix.len())
+                .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+        })
+        .ok_or(error)?;
     let value = &link[prefix.len()..];
     let value = if value.to_lowercase().starts_with("http://")
         || value.to_lowercase().starts_with("https://")

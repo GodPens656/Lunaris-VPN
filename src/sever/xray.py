@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from .models import Profile, Settings, UserError
 
-XRAY_VERSION = "26.3.27"
+XRAY_VERSION = "26.11.9"
 
 
 def xray_ech_config(ech: dict) -> str:
@@ -65,7 +65,7 @@ def build_xray_config(profile: Profile, port: int, password: str, settings: Sett
         # The pinned Xray release supports hybrid key shares in the chosen fingerprint.
     elif tls:
         if tls.get("insecure"):
-            raise UserError("Xray 26.3.27 требует проверку TLS-сертификата; allowInsecure для этого профиля не поддерживается.")
+            raise UserError(f"Xray {XRAY_VERSION} требует проверку TLS-сертификата; allowInsecure для этого профиля не поддерживается.")
         stream["tlsSettings"] = {**common, "allowInsecure": tls.get("insecure", False)}
         if "alpn" in tls:
             stream["tlsSettings"]["alpn"] = tls["alpn"]

@@ -120,9 +120,9 @@ impl Settings {
                 format!("Некорректный домен «{value}». Введите домен без ссылки, пути, порта и маски, например example.com.")
             };
             if raw.is_empty()
-                || raw.chars().any(|c| {
-                    c.is_whitespace() || c.is_control() || "/\\:@?#%*[],;".contains(c)
-                })
+                || raw
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control() || "/\\:@?#%*[],;".contains(c))
             {
                 return Err(invalid());
             }
@@ -137,7 +137,9 @@ impl Settings {
                         || label.len() > 63
                         || label.starts_with('-')
                         || label.ends_with('-')
-                        || !label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                        || !label
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
                 })
             {
                 return Err(invalid());

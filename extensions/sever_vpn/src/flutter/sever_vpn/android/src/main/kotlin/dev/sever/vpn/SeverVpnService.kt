@@ -179,7 +179,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         logMaxLines = 0 // Do not retain unredacted native core logs.
                         debug = false
                     })
-                    if (Libbox.version() != "1.14.0") throw IllegalStateException()
+                    if (Libbox.version() != "1.14.4") throw IllegalStateException()
                     Libbox.checkConfig(nativeConfig)
                     startupStep = "Не удалось создать Android VPN-туннель. Проверьте разрешение VPN."
                     registerNetwork()
@@ -317,7 +317,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             version.destroyForcibly()
             throw IllegalStateException()
         }
-        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Xray 26.3.27 "))
+        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Xray 26.11.9 "))
             throw IllegalStateException()
         val process = ProcessBuilder(executable.absolutePath, "run", "-c", "stdin:")
             .redirectErrorStream(true).start()
@@ -344,7 +344,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             version.destroyForcibly()
             throw ProbeFailure("Ядро Clash (Mihomo) не ответило на проверку версии.")
         }
-        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Mihomo Meta v1.19.32 "))
+        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Mihomo Meta v1.19.34 "))
             throw ProbeFailure("Версия ядра Clash (Mihomo) не соответствует приложению. Переустановите APK.")
         val base = File(filesDir, "mihomo-core")
         if (!base.isDirectory && !base.mkdirs())
@@ -654,7 +654,6 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             } catch (_: Exception) { ctx.errorCode(2) }
         }
     }
-    override fun useProcFS() = false
     override fun findConnectionOwner(protocol: Int, source: String, sourcePort: Int, dest: String, destPort: Int): ConnectionOwner = throw UnsupportedOperationException()
     override fun underNetworkExtension() = false
     override fun includeAllNetworks() = false

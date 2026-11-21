@@ -175,7 +175,7 @@ function settings(){
  ${section('Обновление приложения','refresh',`<p class="helper">Новые версии проверяются при запуске. Источник: GitHub · GodPens656/Lunaris-VPN.</p>${btn('Проверить обновление','check-app-update','refresh')}`)}
  <div class="settings-footer"><span id="settings-save-status" class="helper" role="status" aria-live="polite">Настройки сохраняются автоматически.</span><span class="helper">Изменения подключения применятся при следующем сеансе.</span></div></form>
  ${section('Внешний вид','moon','<p class="muted">Тема, цвет и оформление приложения.</p>'+btn('Настроить оформление','appearance','moon'))}
- <p class="muted">Lunaris client 0.6.5 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;
+ <p class="muted">Lunaris client 0.7.1 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;
 }
 function logs(){return `<div class="section-heading"><h2>Журнал подключения</h2></div><p class="muted" style="margin-bottom:16px">Последние 300 записей. Ссылки, пароли и ключи скрыты. Журнал хранится в памяти.</p><div class="card log" id="log-lines">${esc(state.logs.join('\n') || 'Записей пока нет.')}</div>`;}
 function render(){

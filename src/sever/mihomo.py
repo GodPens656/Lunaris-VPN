@@ -4,15 +4,14 @@ from copy import deepcopy
 from .models import Profile, Settings, UserError
 from .routing import RUSSIAN_DOMAIN_SUFFIXES
 
-MIHOMO_VERSION = "1.19.32"
+MIHOMO_VERSION = "1.19.34"
 
 
 def effective_client_fingerprint(profile: Profile) -> str | None:
     tls = profile.outbound.get("tls", {})
     fingerprint = tls.get("utls", {}).get("fingerprint")
-    # v1.19.32 pins metacubex/utls v1.8.8. Only its Chrome Auto
-    # fingerprint offers X25519MLKEM768. The support flag preserves an
-    # existing key share; it cannot add one to Firefox/Safari/etc.
+    # Chrome Auto offers X25519MLKEM768. The support flag only
+    # preserves an existing key share.
     # Keep absent/false hints unchanged for older REALITY servers.
     if "reality" in tls and profile.options.get("support-x25519mlkem768") is True:
         return "chrome"

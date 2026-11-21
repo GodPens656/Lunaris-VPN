@@ -1,5 +1,16 @@
 # Lunaris client
 
+**0.7.1** — обновлены ядра Mihomo до 1.19.34, sing-box и Android libbox до 1.14.4, Xray до 26.11.9.
+
+**0.7.0** — свои домены для прямого подключения и проверка обновлений:
+
+- В настройках маршрутизации можно указать домены, которые открываются
+  напрямую, включая их поддомены. Список сохраняется автоматически
+  и применяется в sing-box и Mihomo на Windows и Android.
+- Приложение проверяет стабильные выпуски на GitHub при запуске и позволяет
+  открыть загрузку ZIP или APK в системном браузере. Ручная проверка доступна
+  в настройках.
+
 **0.6.5** — анимации вкладок, сортировка по пингу и трей:
 
 - Новое название приложения: **Lunaris client**, включая окно Windows,
@@ -108,12 +119,12 @@ GitHub API и отсутствие релизов не мешают запуск
 
 ## Готовые сборки
 
-Готовые файлы версии 0.6.5:
+Готовые файлы версии 0.7.1:
 
-- `dist/LunarisClient-0.6.5-windows-x64.zip` — распаковать **всю** папку и запустить `LunarisClient.exe`.
-- `dist/LunarisClient-0.6.5-arm64.apk` — Android ARM64, versionCode **26**.
-- `dist/LunarisClient-0.6.5-source.zip` — исходники с Cargo.lock и package-lock.json.
-- `dist/SHA256SUMS-0.6.5.txt` — контрольные суммы.
+- `dist/LunarisClient-0.7.1-windows-x64.zip` — распаковать **всю** папку и запустить `LunarisClient.exe`.
+- `dist/LunarisClient-0.7.1-arm64.apk` — Android ARM64, versionCode **28**.
+- `dist/LunarisClient-0.7.1-source.zip` — исходники с Cargo.lock и package-lock.json.
+- `dist/SHA256SUMS-0.7.1.txt` — контрольные суммы.
 
 Windows требует Microsoft Edge WebView2 Runtime. TUN требует прав
 администратора. По умолчанию закрытие окна Windows оставляет приложение и VPN в трее.
@@ -135,7 +146,7 @@ UTF-8 и `base64:` ([формат метаданных](https://www.happ.su/main
 не более 72 часов, и сообщения об истёкших подписках. Число оставшихся дней
 округляется вверх; состояние пересчитывается при открытом приложении.
 
-## Сборка 0.6.5
+## Сборка 0.7.1
 
 Нужны Rust stable MSVC, Node.js 22 LTS, Visual Studio C++ Build Tools;
 для Android — JDK 17, SDK 36, NDK 28.2 и принятые лицензии SDK.
@@ -386,15 +397,15 @@ trojan://synthetic-password@example.com:443?sni=example.com#Example
 
 В «Настройки → Подключение → Ядро» доступны **sing-box / Xray** и **Clash (Mihomo)** в Windows и Android. Выбор сохраняется сразу и применяется при следующем подключении; перед сменой ядра отключите VPN. Существующие профили и подписки сохраняются. На ПК по умолчанию используется **Clash (Mihomo)**, на Android — **sing-box / Xray**. Ранее сохранённый выбор ядра сохраняется при обновлении; если в старых настройках поле ядра отсутствовало, применяется новый платформенный вариант по умолчанию.
 
-Mihomo 1.19.32 автоматически скачивается скриптом сборки с проверкой SHA-256 архива, бинарника и лицензии. В Windows он самостоятельно обслуживает системный прокси или TUN, API и счётчики; Xray при этом не запускается. Можно отдельно указать путь к `mihomo.exe`; путь к sing-box сохраняется независимо.
+Mihomo 1.19.34 автоматически скачивается скриптом сборки с проверкой SHA-256 архива, бинарника и лицензии. В Windows он самостоятельно обслуживает системный прокси или TUN, API и счётчики; Xray при этом не запускается. Можно отдельно указать путь к `mihomo.exe`; путь к sing-box сохраняется независимо.
 
 На Android Mihomo запускается отдельным процессом из `nativeLibraryDir` (`libmihomo.so`) и обслуживает зашифрованное соединение. libbox остаётся мостом между Android TUN и локальным SOCKS5 Mihomo с одноразовым паролем. Конфигурация поступает в stdin, открытый файл с секретами не создаётся. Сокеты процесса проходят вне VPN через исключение UID приложения, как для Xray. При остановке службы или аварии Mihomo соединение очищается. Готовые официальные бинарники закреплены для arm64-v8a, x86_64 и armeabi-v7a; Gradle проверяет их SHA-256 и сохраняет исполняемый ELF без strip.
 
 Поддерживаются VLESS TCP/Reality/Vision, WS, gRPC, HTTP/HTTP2, HTTPUpgrade и XHTTP; Trojan TCP/WS/gRPC/HTTPUpgrade; Hysteria2 с Salamander и ECH. Reality `spx` сохраняется в профиле и больше не блокирует Mihomo: этот параметр задаёт путь обхода сайта при неуспешной авторизации в Xray, а не параметр успешного Reality handshake. Mihomo использует собственный fallback без настройки spiderX; подключение остаётся на выбранном ядре, с обычной проверкой авторизации и HTTPS. Различие записывается в журнал без значения `spx`. Trojan HTTP/HTTP2 по-прежнему требует sing-box / Xray. Формат импорта остаётся списком URI/Base64 или локальным JSON со ссылками; произвольный Clash YAML не импортируется.
 
-Назначение `spx` проверено по [исходникам Xray Reality](https://github.com/XTLS/Xray-core/blob/v26.3.27/transport/internet/reality/reality.go#L177) и [Mihomo Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/tls/reality.go#L118).
+Назначение `spx` проверено по [исходникам Xray Reality](https://github.com/XTLS/Xray-core/blob/v26.11.9/transport/internet/reality/reality.go#L228) и [Mihomo Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go#L134).
 
-Для Reality с явным `support-x25519mlkem768=true` адаптер Mihomo использует `client-fingerprint: chrome`. Закреплённый Mihomo 1.19.32 использует uTLS 1.8.8: его `firefox` соответствует Firefox 120 без ML-KEM, а флаг поддержки только сохраняет имеющийся гибридный key share. Поэтому прежнее сочетание `fp=firefox` и этого флага несовместимо с серверами, требующими ML-KEM. Замена действует только в конфигурации Mihomo и записывается в журнал; сохранённый профиль и конфигурация sing-box / Xray сохраняют исходный fingerprint. При отсутствующем или ложном флаге поведение не меняется. Основание: [зависимости Mihomo](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/go.mod), [шаблоны uTLS](https://github.com/MetaCubeX/utls/blob/v1.8.8/u_common.go), [обработка Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/tls/reality.go).
+Для Reality с явным `support-x25519mlkem768=true` адаптер Mihomo использует `client-fingerprint: chrome`. Так ядро отправляет X25519MLKEM768 даже для профилей, чей fingerprint не включает эту группу: переключатель Mihomo сохраняет имеющийся key share, но не добавляет новый. Замена применяется при построении конфигурации Mihomo и записывается в журнал. При отсутствующем или ложном флаге используется fingerprint из профиля. [Шаблоны uTLS](https://github.com/MetaCubeX/utls/blob/v1.9.0-alpha.1/u_common.go), [обработка Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go).
 
 ```powershell
 # Получить только дополнительное ядро, без повторной загрузки sing-box/Xray
@@ -402,7 +413,7 @@ Mihomo 1.19.32 автоматически скачивается скрипто�
 .venv\Scripts\python.exe scripts\fetch_core.py android --core mihomo
 ```
 
-Источник и схема: [официальный релиз Mihomo 1.19.32](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32), [конфигурация Mihomo](https://wiki.metacubex.one/en/config/).
+Источник и схема: [официальный релиз Mihomo 1.19.34](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34), [конфигурация Mihomo](https://wiki.metacubex.one/en/config/).
 
 В Windows TUN адрес VPN-сервера разрешается через выбранный Bootstrap DNS
 **до** запуска туннеля. Полученные IPv4/IPv6-адреса передаются sing-box и Xray
@@ -416,8 +427,9 @@ Mihomo 1.19.32 автоматически скачивается скрипто�
 
 | Компонент | Версия / требование |
 | --- | --- |
-| sing-box Windows и API Android libbox | 1.14.0 |
-| Xray Windows и Android arm64/x86_64 | 26.3.27 |
+| sing-box Windows и API Android libbox | 1.14.4 |
+| Xray Windows и Android arm64/x86_64 | 26.11.9 |
+| Mihomo Windows и Android arm64/x86_64/armv7 | 1.19.34 |
 | Python разработки | 3.13.5; проект допускает 3.12–3.13 |
 | Python встроенной сборки | 3.13.15, выбран через Flet `--python-version 3.13` |
 | Flet Python / CLI / Desktop / Web / Dart | 1.0.3 |
@@ -533,20 +545,20 @@ DNS ядра: DoH, DoT или UDP, направленный через VPN; по
 
 ### Реальная библиотека и происхождение
 
-Windows ZIP скачивается из **официального** релиза [SagerNet/sing-box v1.14.0](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0). Android AAR — готовая **сторонняя** сборка [singbox-android/libbox 1.14.0](https://github.com/singbox-android/libbox/releases/tag/1.14.0). Она не объявляется официальным бинарником SagerNet и её воспроизводимость относительно исходников нами не доказана. Сведения издателя: [README библиотеки](https://github.com/singbox-android/libbox/blob/main/README.md).
+Windows ZIP скачивается из **официального** релиза [SagerNet/sing-box v1.14.4](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4). Android AAR — готовая **сторонняя** сборка [singbox-android/libbox 1.14.4](https://github.com/singbox-android/libbox/releases/tag/1.14.4). Она не объявляется официальным бинарником SagerNet и её воспроизводимость относительно исходников нами не доказана. Сведения издателя: [README библиотеки](https://github.com/singbox-android/libbox/blob/main/README.md).
 
-Проверены наличие `classes.jar`, Java package `io.nekohasekai.libbox`, ABI arm64-v8a, armeabi-v7a, x86, x86_64 и minSdk 24 внутри AAR. Через `javap` проверены реальные `PlatformInterface`, `CommandServerHandler`, `TunOptions`, `SetupOptions`, `CommandServer.startOrReloadService`, `Libbox.setup/checkConfig/version`. Kotlin написан под этот API. На старте дополнительно проверяется версия 1.14.0.
+Проверены наличие `classes.jar`, Java package `io.nekohasekai.libbox`, ABI arm64-v8a, armeabi-v7a, x86, x86_64 и minSdk 24 внутри AAR. Через `javap` проверены реальные `PlatformInterface`, `CommandServerHandler`, `TunOptions`, `SetupOptions`, `CommandServer.startOrReloadService`, `Libbox.setup/checkConfig/version`. Kotlin написан под этот API. На старте дополнительно проверяется версия 1.14.4.
 
 Скрипт загрузки и Gradle проверяют SHA-256:
 
 ```text
-Windows ZIP: 3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6
-Android AAR: 13fbeabcb4622250762afa1b137daaba861a4dc1875643d18621339912f32330
+Windows ZIP: 99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df
+Android AAR: d2685924a657705beda44e94c6dc499e781df1ad20d65474e3591ec2f8b96465
 ```
 
 Контрольная сумма фиксирует выбранный файл, но не удостоверяет доверие к его издателю. Подмена файла останавливает сборку. AAR разрешается Gradle как flatDir-артефакт и транзитивно включается в APK, а не как запрещённая файловая зависимость Android library.
 
-Есть независимый путь сборки из официального upstream в `.github/workflows/android-core.yml`: Go из go.mod, Java 17, Android NDK 29.0.14206865, upstream commit `0b8995879f29a9b98ee027bc17b75e101445b238`. Он выполняется в GitHub Actions вручную и отдаёт AAR, лицензию и SHA256SUMS. Go на локальном ПК не требуется. Workflow ещё не запускался; его результат нельзя считать проверенным. Для замены стороннего AAR требуется проверить API/ABI, записать новую контрольную сумму в загрузчик и Gradle и повторить сборку/испытания на устройстве.
+Есть независимый путь сборки из официального upstream в `.github/workflows/android-core.yml`: Go из go.mod, Java 17, Android NDK 29.0.14206865, upstream commit `c005f35300ce76427dc285481ec5695f5b179cd2`. Он выполняется в GitHub Actions вручную и отдаёт AAR, лицензию и SHA256SUMS. Go на локальном ПК не требуется. Workflow ещё не запускался; его результат нельзя считать проверенным. Для замены стороннего AAR требуется проверить API/ABI, записать новую контрольную сумму в загрузчик и Gradle и повторить сборку/испытания на устройстве.
 
 ## Хранение и секреты
 
@@ -609,9 +621,9 @@ ADB не обнаружил подключённых Android-устройств.
 - [Hysteria2 URI scheme](https://v2.hysteria.network/docs/developers/URI-Scheme/)
 - [Trojan URI](https://p4gefau1t.github.io/trojan-go/developer/url/)
 - [sing-box VLESS](https://sing-box.sagernet.org/configuration/outbound/vless/), [Trojan](https://sing-box.sagernet.org/configuration/outbound/trojan/), [Hysteria2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/)
-- [Xray 26.3.27](https://github.com/XTLS/Xray-core/releases/tag/v26.3.27), [Xray DNS](https://xtls.github.io/en/config/dns.html)
+- [Xray 26.11.9](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9), [Xray DNS](https://xtls.github.io/en/config/dns.html)
 - [TLS/Reality](https://sing-box.sagernet.org/configuration/shared/tls/), [V2Ray transports](https://sing-box.sagernet.org/configuration/shared/v2ray-transport/), [TUN](https://sing-box.sagernet.org/configuration/inbound/tun/), [Clash API](https://sing-box.sagernet.org/configuration/experimental/clash-api/)
-- [libbox upstream API v1.14.0](https://github.com/SagerNet/sing-box/tree/v1.14.0/experimental/libbox)
+- [libbox upstream API v1.14.4](https://github.com/SagerNet/sing-box/tree/v1.14.4/experimental/libbox)
 - [Flet extensions](https://flet.dev/docs/extend/user-extensions/)
 - [Android VPN](https://developer.android.com/develop/connectivity/vpn), [foreground service types](https://developer.android.com/develop/background-work/services/fgs/service-types)
 

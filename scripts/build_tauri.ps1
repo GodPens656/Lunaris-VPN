@@ -1,6 +1,6 @@
 param(
     [ValidateSet('windows','apk','all')][string]$Target = 'all',
-    [string]$BuildDir = (Join-Path $env:TEMP 'lunaris-tauri-065-build')
+    [string]$BuildDir = (Join-Path $env:TEMP 'lunaris-tauri-071-build')
 )
 $ErrorActionPreference = 'Stop'
 $lunarisRoot = Split-Path -Parent $PSScriptRoot

@@ -10,6 +10,21 @@ DIST = ROOT / "dist"
 VERSION = tomllib.loads(ROOT.joinpath("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
+def source_files(folder: str):
+    excluded = {"__pycache__", "node_modules", "target", "gen", ".gradle", "build", "python", "jniLibs", ".pytest_cache"}
+    for directory, directories, files in ROOT.joinpath(folder).walk():
+        # Prune caches and temporary test runs before traversing their contents.
+        directories[:] = sorted(name for name in directories
+            if name not in excluded and not name.startswith(".test-")
+            and "assets/core" not in (directory / name).as_posix())
+        for name in sorted(files):
+            path = directory / name
+            if (path.is_file() and name not in excluded and not name.startswith(".test-")
+                    and "assets/core" not in path.as_posix()
+                    and path.suffix not in {".pyc", ".aar", ".exe", ".dll", ".so"}):
+                yield path
+
+
 def package(windows: Path = DIST / "windows"):
     if not windows.joinpath("LunarisClient.exe").is_file():
         raise SystemExit("Copy the Tauri executable and runtime to the release directory first")
@@ -27,10 +42,8 @@ def package(windows: Path = DIST / "windows"):
                 archive.write(path, Path("LunarisClient/docs") / path.name)
     with zipfile.ZipFile(DIST / f"LunarisClient-{VERSION}-source.zip", "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for folder in ["app", "src", "extensions", "scripts", "tests", "docs", ".github", "assets/licenses"]:
-            for path in sorted(ROOT.joinpath(folder).rglob("*")):
-                excluded = {"__pycache__", "node_modules", "target", "gen", ".gradle", "build", "python", "jniLibs"}
-                if path.is_file() and not excluded.intersection(path.relative_to(ROOT).parts) and "assets/core" not in path.as_posix() and path.suffix not in {".pyc", ".aar", ".exe", ".dll", ".so"}:
-                    archive.write(path, Path("LunarisClient-source") / path.relative_to(ROOT))
+            for path in source_files(folder):
+                archive.write(path, Path("LunarisClient-source") / path.relative_to(ROOT))
         for name in ["README.md", "LICENSE", "THIRD_PARTY.md", "pyproject.toml", ".gitignore"]:
             archive.write(ROOT / name, f"LunarisClient-source/{name}")
     sums = []

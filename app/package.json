@@ -1,6 +1,6 @@
 {
   "name": "lunaris-vpn",
-  "version": "0.6.5",
+  "version": "0.7.1",
   "private": true,
   "scripts": {
     "test": "node --test ../tests/ui_settings.test.cjs ../tests/ui_background.test.cjs tests/ui_routing.test.cjs tests/ui_updates.test.cjs",

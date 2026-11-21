@@ -64,7 +64,7 @@ tasks.register('verifyLibbox') {
             while ((n = stream.read(buf)) > 0) digest.update(buf, 0, n)
         }
         def actual = digest.digest().encodeHex().toString()
-        if (actual != '13fbeabcb4622250762afa1b137daaba861a4dc1875643d18621339912f32330') {
+        if (actual != 'd2685924a657705beda44e94c6dc499e781df1ad20d65474e3591ec2f8b96465') {
             throw new GradleException('libbox.aar SHA-256 mismatch. Use the pinned release asset.')
         }
     }
@@ -72,8 +72,8 @@ tasks.register('verifyLibbox') {
 tasks.register('verifyXray') {
     doLast {
         def expected = [
-            'arm64-v8a': '19101a8191d6d606da975f719c8cdb80b8710b87ab17edc00ef74b9e39588714',
-            'x86_64': '26b2ac1e596242847a247df9e932ac480bf6072c5c686517f5a3017320895814'
+            'arm64-v8a': 'dbfe83c136ebb58635f5ad4e21d1df077473aa6fc4bfa1b7ee193516d0af8255',
+            'x86_64': '63ba44d391e1bfd4061fad9584ed171671b5928b91128001bf4921e8cb9b46aa'
         ]
         expected.each { abi, checksum ->
             def binary = file("src/main/jniLibs/${abi}/libxray.so")
@@ -91,9 +91,9 @@ tasks.register('verifyXray') {
 tasks.register('verifyMihomo') {
     doLast {
         def expected = [
-            'arm64-v8a': 'bb9afbd48717f92d59e07da35fb694b83d40d6edb63eb9033c2ee4174137d195',
-            'x86_64': '1c5aa8e8a7006e4093560fe48505fd1587de29210879e806822cb1094b334413',
-            'armeabi-v7a': '10e85ebad5380e5cdcb4028b6ba40910593bc9c37ce6b50e9f3a21adfca1408d'
+            'arm64-v8a': '1369bebba2b7a6fe971fe6ece0cb5aa18c81e49c89dd8340f43e5e7583d3da36',
+            'x86_64': '070332fedbc1268df6f1d6f329a072b14b1ba8b102cd45465c3681bd12682fed',
+            'armeabi-v7a': '5047466f174206ef718a505f09652ca8f17c1f126c4a60639dc1208be990c58d'
         ]
         expected.each { abi, checksum ->
             def binary = file("src/main/jniLibs/${abi}/libmihomo.so")

@@ -9,6 +9,7 @@ import re
 import uuid
 from urllib.parse import unquote, urlsplit
 
+from . import CORE_VERSION
 from .models import ImportReport, Profile, Rejection, UserError
 
 MAX_BODY = 2 * 1024 * 1024
@@ -177,7 +178,7 @@ def tls_options(q: dict, server: str, security: str) -> dict | None:
             raise UserError("TLS-параметры заданы при отключённом TLS.")
         return None
     if security not in {"tls", "reality"}:
-        raise UserError("Этот тип безопасности не поддерживается sing-box 1.14.0.")
+        raise UserError(f"Этот тип безопасности не поддерживается sing-box {CORE_VERSION}.")
     tls = {"enabled": True, "server_name": host(alias(q, "sni", "peer", server))}
     insecure = alias(q, "insecure", "allowInsecure", "0")
     if boolean(insecure):

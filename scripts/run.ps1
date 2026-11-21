@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $lunarisRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $lunarisRoot
-$lunarisExecutable = Join-Path $lunarisRoot 'dist/windows-0.6.5/LunarisClient.exe'
+$lunarisExecutable = Join-Path $lunarisRoot 'dist/windows-0.7.1/LunarisClient.exe'
 if (Test-Path -LiteralPath $lunarisExecutable) {
     & $lunarisExecutable
 } else {

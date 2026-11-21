@@ -203,7 +203,10 @@ fn custom_bypass_routes_work_alone_and_with_russian_zones_on_both_platforms() {
             let xray = parser::parse_uri(&format!("{}&mode=multi", uri()), None).unwrap();
             let bridge = config::android(&xray, &settings, "api", "local").unwrap();
             for config in [&sing, &android, &bridge] {
-                assert_eq!(config["route"]["rules"][2]["domain_suffix"], json!(expected));
+                assert_eq!(
+                    config["route"]["rules"][2]["domain_suffix"],
+                    json!(expected)
+                );
                 assert_eq!(config["route"]["rules"][2]["outbound"], "direct");
                 assert_eq!(config["route"]["final"], "proxy");
                 assert_eq!(config["outbounds"][1]["domain_resolver"], "remote");
@@ -271,7 +274,9 @@ async fn custom_bypass_settings_persist_rollback_and_clear() {
     host.fail.store(false, Ordering::SeqCst);
     engine.shutdown().await.unwrap();
     drop(engine);
-    let repo = Repository::open(dir.path().into(), host.clone()).await.unwrap();
+    let repo = Repository::open(dir.path().into(), host.clone())
+        .await
+        .unwrap();
     assert_eq!(serde_json::to_value(&repo.state.settings).unwrap(), saved);
     drop(repo);
     let engine = Engine::new(

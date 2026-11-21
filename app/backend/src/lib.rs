@@ -14,6 +14,6 @@ pub mod windows;
 
 pub type Result<T> = std::result::Result<T, String>;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SING_BOX: &str = "1.14.0";
-pub const XRAY: &str = "26.3.27";
-pub const MIHOMO: &str = "1.19.32";
+pub const SING_BOX: &str = "1.14.4";
+pub const XRAY: &str = "26.11.9";
+pub const MIHOMO: &str = "1.19.34";

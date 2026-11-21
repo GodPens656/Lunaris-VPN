@@ -9,10 +9,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: SagerNet/sing-box
-          ref: 0b8995879f29a9b98ee027bc17b75e101445b238
-          fetch-depth: 0 # build_shared.ReadTag must find v1.14.0, not embed "unknown".
+          ref: c005f35300ce76427dc285481ec5695f5b179cd2
+          fetch-depth: 0 # build_shared.ReadTag must find v1.14.4, not embed "unknown".
       - name: Verify source version
-        run: test "$(git describe --tags --exact-match)" = 'v1.14.0'
+        run: test "$(git describe --tags --exact-match)" = 'v1.14.4'
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -33,7 +33,7 @@ jobs:
           sha256sum libbox.aar libbox-legacy.aar > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: libbox-official-v1.14.0
+          name: libbox-official-v1.14.4
           path: |
             libbox.aar
             libbox-legacy.aar

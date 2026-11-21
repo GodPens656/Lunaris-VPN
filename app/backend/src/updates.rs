@@ -6,8 +6,7 @@ use std::time::Duration;
 
 pub const RELEASES_API: &str =
     "https://api.github.com/repos/GodPens656/Lunaris-VPN/releases/latest";
-pub const DOWNLOAD_PREFIX: &str =
-    "https://github.com/GodPens656/Lunaris-VPN/releases/download/";
+pub const DOWNLOAD_PREFIX: &str = "https://github.com/GodPens656/Lunaris-VPN/releases/download/";
 const MAX_RELEASE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -84,7 +83,9 @@ pub fn validate_download_url(value: &str) -> Result<()> {
         || value.chars().any(|c| c.is_whitespace() || c.is_control())
         || url.path().split('/').count() != 7
         || url.path().split('/').skip(1).any(str::is_empty)
-        || !url.path().starts_with("/GodPens656/Lunaris-VPN/releases/download/")
+        || !url
+            .path()
+            .starts_with("/GodPens656/Lunaris-VPN/releases/download/")
     {
         return Err("Скачивание разрешено только из релизов Lunaris-VPN на GitHub.".into());
     }
@@ -131,7 +132,11 @@ fn select_release(data: &[u8], current: &str, platform: Platform) -> Result<Opti
     }))
 }
 
-async fn check_endpoint(endpoint: &str, current: &str, platform: Platform) -> Result<Option<Update>> {
+async fn check_endpoint(
+    endpoint: &str,
+    current: &str,
+    platform: Platform,
+) -> Result<Option<Update>> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .user_agent(format!("LunarisClient/{current}"))
@@ -219,7 +224,9 @@ mod tests {
         for flag in ["draft", "prerelease"] {
             let mut data = release("v0.7.0");
             data[flag] = json!(true);
-            assert!(select(&data, "0.6.5", Platform::WindowsX64).unwrap().is_none());
+            assert!(select(&data, "0.6.5", Platform::WindowsX64)
+                .unwrap()
+                .is_none());
         }
     }
 
@@ -234,15 +241,26 @@ mod tests {
             assert!(update.asset_name.ends_with(suffix));
             assert_eq!(update.version, "0.7.0");
             assert_eq!(update.current_version, "0.6.5");
-            assert!(serde_json::to_value(&update).unwrap().get("download_url").is_none());
+            assert!(serde_json::to_value(&update)
+                .unwrap()
+                .get("download_url")
+                .is_none());
         }
         data["assets"][0]["name"] = json!("LunarisClient-0.7.0-source.zip");
-        assert!(select(&data, "0.6.5", Platform::WindowsX64).unwrap().is_none());
-        assert!(select(&data, "0.6.5", Platform::AndroidArm64).unwrap().is_some());
+        assert!(select(&data, "0.6.5", Platform::WindowsX64)
+            .unwrap()
+            .is_none());
+        assert!(select(&data, "0.6.5", Platform::AndroidArm64)
+            .unwrap()
+            .is_some());
         data["assets"][1]["state"] = json!("new");
-        assert!(select(&data, "0.6.5", Platform::AndroidArm64).unwrap().is_none());
+        assert!(select(&data, "0.6.5", Platform::AndroidArm64)
+            .unwrap()
+            .is_none());
         data["assets"] = json!([]);
-        assert!(select(&data, "0.6.5", Platform::WindowsX64).unwrap().is_none());
+        assert!(select(&data, "0.6.5", Platform::WindowsX64)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -303,6 +321,10 @@ mod tests {
             }
             server.await.unwrap();
         }
-        assert!(check_endpoint("http://127.0.0.1:0/", "0.6.5", Platform::WindowsX64).await.is_err());
+        assert!(
+            check_endpoint("http://127.0.0.1:0/", "0.6.5", Platform::WindowsX64)
+                .await
+                .is_err()
+        );
     }
 }

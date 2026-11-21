@@ -657,7 +657,7 @@ impl WindowsHost {
                 };
                 let version = checked(&xray, &["version"], &self.log).await?;
                 if !version.starts_with(&format!("Xray {} ", crate::XRAY)) {
-                    return Err("Нужен Xray 26.3.27 из проверенного комплекта ядер.".into());
+                    return Err(format!("Нужен Xray {} из проверенного комплекта ядер.", crate::XRAY));
                 }
                 let port = free_port(&[s.mixed_port, s.api_port])?;
                 let password = secret.clone();

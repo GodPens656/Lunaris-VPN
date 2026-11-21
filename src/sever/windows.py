@@ -133,7 +133,7 @@ class WindowsCore(ObservableCore):
             raise UserError("Для этого сервера нужен xray.exe. Выполните scripts/fetch_core.py windows и пересоберите приложение.")
         version = await self._command(executable, "version")
         if not version.startswith(f"Xray {XRAY_VERSION} "):
-            raise UserError("Нужен Xray 26.3.27 из проверенного комплекта ядер.")
+            raise UserError(f"Нужен Xray {XRAY_VERSION} из проверенного комплекта ядер.")
         port = free_proxy_port(settings.mixed_port, settings.api_port)
         password = secrets.token_urlsafe(32)
         config = build_xray_config(profile, port, password, settings, endpoint_hosts=endpoint_hosts)
@@ -192,7 +192,7 @@ class WindowsCore(ObservableCore):
                 if mihomo and not version.startswith(f"Mihomo Meta v{MIHOMO_VERSION} "):
                     raise UserError(f"Нужен Mihomo {MIHOMO_VERSION} из проверенного комплекта ядер.")
                 if not mihomo and f"sing-box version {CORE_VERSION}\n" not in version.replace("\r\n", "\n"):
-                    raise UserError("Нужен sing-box 1.14.0. Версия ядра не совпадает с проверенной конфигурацией.")
+                    raise UserError(f"Нужен sing-box {CORE_VERSION}. Версия ядра не совпадает с проверенной конфигурацией.")
                 if settings.mode == "tun" and not ctypes.windll.shell32.IsUserAnAdmin():
                     raise UserError("TUN требует запуска приложения от имени администратора.")
                 await asyncio.to_thread(available_ports, settings.mixed_port, settings.api_port)

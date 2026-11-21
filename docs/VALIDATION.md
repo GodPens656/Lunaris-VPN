@@ -1,3 +1,48 @@
+# Проверка 15.11.2026 — Lunaris client 0.7.0
+
+Выпуск включает пользовательские домены для прямого подключения и проверку
+стабильных обновлений на GitHub. Версия согласована в интерфейсе, Python-эталоне,
+npm, Cargo и lock-файлах; Android versionCode повышен до **27**.
+
+- **61 JavaScript-тест пройден**: настройки, фон, маршрутизация и обновления.
+  Отчёт: `build/release-070-ui-tests.log`.
+- **29 Rust-тестов пройдены**: 6 модульных и 23 интеграционных, включая
+  нормализацию пользовательских доменов, конфигурации обоих ядер, сохранение
+  и откат настроек, выбор версии и файла обновления, локальные HTTP-ответы.
+  Rustfmt и Clippy `--all-targets -- -D warnings` пройдены. Форматирование
+  новых Rust-файлов приведено к rustfmt.
+  Отчёты: `build/release-070-rust-tests.log`, `build/release-070-rustfmt.log`,
+  `build/release-070-clippy.log`.
+- **11 интеграционных проверок Rust runtime пройдены** с реальными локальными
+  VPN-ядрами через диагностический CLI в режиме `--probe`. Системный прокси
+  не изменился. Отчёты: `build/release-070-runtime.log` и XML рядом с ним.
+- **96 проверок совместимости пройдены**: брендинг, конфигурации,
+  Windows-хранилище, API, Android bridge, диагностика и lifecycle.
+  Отчёт: `build/release-070-compat-verified.log`.
+- **Windows x64 release** собран: ProductName/FileDescription **Lunaris client**,
+  ProductVersion/FileVersion **0.7.0**. SHA-256 четырёх файлов runtime проверен.
+  Готовый EXE запущен в отдельном хранилище с отключённым закрытием в трей:
+  создано окно, фронтенд инициализировал Rust-хранилище, штатное закрытие
+  завершилось с кодом 0. Системный прокси не изменился.
+  Отчёты: `build/release-070-build.log`, `build/release-070-windows-smoke.log`.
+- **Android ARM64 release** собран: applicationId `dev.sever.sever_client`,
+  versionName **0.7.0**, versionCode **27**, minSdk **26**, targetSdk **36**,
+  application-label **Lunaris client**. `apksigner verify` пройден;
+  сертификат SHA-256 совпадает с 0.6.5 (прежняя локальная debug-подпись):
+  `4952eba6134a68f44f1afde05a680e70bc61e3b5bd7cb7540358bbfe6db63a32`.
+  SHA-256 обоих исполняемых Go-ядер проверен после упаковки;
+  Python и Windows-файлов в APK нет.
+  Отчёты: `build/release-070-apk-build.log`,
+  `build/release-070-android-signature.log`, `build/release-070-android-badging.log`.
+
+ADB не обнаружил подключённых устройств. Установка APK и VPN-сеанс
+на физическом Android-устройстве в этом выпуске не проверялись.
+
+Файлы: `dist/LunarisClient-0.7.0-windows-x64.zip`,
+`dist/LunarisClient-0.7.0-arm64.apk`, `dist/LunarisClient-0.7.0-source.zip`;
+контрольные суммы: `dist/SHA256SUMS-0.7.0.txt`.
+Для Windows распакуйте всю папку и запустите `LunarisClient.exe`.
+
 # Проверка 01.11.2026 — Lunaris client 0.6.5
 
 Добавлены переходы вкладок с затуханием и сдвигом, отмена устаревших

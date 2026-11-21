@@ -6,9 +6,14 @@ from .subscriptions import validate_url
 
 
 def subscription_url(link: str) -> str:
-    prefix = "lunaris://import://"
     error = "Некорректная ссылка импорта. Нужна lunaris://import://https://адрес-подписки."
-    if not isinstance(link, str) or len(link) > 25000 or not link.lower().startswith(prefix):
+    if not isinstance(link, str) or len(link) > 25000:
+        raise UserError(error)
+    # Browsers remove the empty port from the original `import:` authority.
+    lower = link.lower()
+    prefixes = ("lunaris://import://", "lunaris://import//")
+    prefix = next((value for value in prefixes if lower.startswith(value)), None)
+    if prefix is None:
         raise UserError(error)
     url = link[len(prefix):]
     # Decode a wrapped URL once, but preserve escapes in a normal subscription

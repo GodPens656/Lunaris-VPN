@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 # Keep the package name and org stable so Android updates retain the application ID.
 name = "sever-client"
-version = "0.6.5"
+version = "0.7.1"
 description = "Lunaris client build tools and legacy compatibility tests; runtime backend is Rust"
 requires-python = ">=3.12,<3.14"
 license = "GPL-3.0-or-later"
@@ -29,5 +29,5 @@ markers = ["core: requires the downloaded Windows core executables"]
 
 [tool.lunaris]
 ui = "tauri2"
-build_number = 26
+build_number = 28
 android_application_id = "dev.sever.sever_client"

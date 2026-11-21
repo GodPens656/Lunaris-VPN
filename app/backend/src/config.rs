@@ -144,7 +144,10 @@ pub fn xray(
         stream["realitySettings"] = rsettings;
     } else if tls.is_object() {
         if tls["insecure"] == true {
-            return Err("Xray 26.3.27 требует проверку TLS-сертификата; allowInsecure для этого профиля не поддерживается.".into());
+            return Err(format!(
+                "Xray {} требует проверку TLS-сертификата; allowInsecure для этого профиля не поддерживается.",
+                crate::XRAY
+            ));
         }
         let mut t = common;
         t["allowInsecure"] = json!(false);

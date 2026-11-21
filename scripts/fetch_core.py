@@ -8,39 +8,41 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SING_BOX_VERSION = "1.14.4"
+SING_BOX_WINDOWS = f"sing-box-{SING_BOX_VERSION}-windows-amd64"
 ASSETS = {
     "windows": {
-        "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-windows-amd64.zip",
-        "sha256": "3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6",
+        "url": f"https://github.com/SagerNet/sing-box/releases/download/v{SING_BOX_VERSION}/{SING_BOX_WINDOWS}.zip",
+        "sha256": "99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
     },
     "android": {
-        "url": "https://github.com/singbox-android/libbox/releases/download/1.14.0/libbox.aar",
-        "sha256": "13fbeabcb4622250762afa1b137daaba861a4dc1875643d18621339912f32330",
+        "url": f"https://github.com/singbox-android/libbox/releases/download/{SING_BOX_VERSION}/libbox.aar",
+        "sha256": "d2685924a657705beda44e94c6dc499e781df1ad20d65474e3591ec2f8b96465",
     },
 }
 WINDOWS_FILES = {
-    "sing-box.exe": "aad0ede010eafa7b277e520464f3a66fde820103d737eff739f40f3cc9451dcc",
-    "libcronet.dll": "eee741046f0a3975124bae349aeac237aa306f3cc4de59ff5de070e74dbfdaeb",
+    "sing-box.exe": "8f30682ee198855440d2a7fe070d5d3653793b2d01bb8c85eea88f93bbe7c8b9",
+    "libcronet.dll": "3217c6260fbca5f16072e0b79735742f40109a63bb0ff88fd6b96dd6b54a2928",
 }
-XRAY_VERSION = "26.3.27"
-MIHOMO_VERSION = "1.19.32"
+XRAY_VERSION = "26.11.9"
+MIHOMO_VERSION = "1.19.34"
 MIHOMO_ASSET = {
     "url": f"https://github.com/MetaCubeX/mihomo/releases/download/v{MIHOMO_VERSION}/mihomo-windows-amd64-compatible-v{MIHOMO_VERSION}.zip",
-    "sha256": "974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
+    "sha256": "cd6738d4648cc1a5f48049a1343b697ab510889d648f045c5c780fc1ab443a79",
     "member": "mihomo-windows-amd64-compatible.exe",
-    "binary_sha256": "04f8d7fc2b314771e1ecbf15951d59f0e1cb7914503c88cfb6972ff6a824e314",
+    "binary_sha256": "5a0231811a80b27477ebdee15684b41946d01afbd2114534e9a4b256125ca147",
     "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
 }
 MIHOMO_ANDROID = [
-    ("arm64-v8", "arm64-v8a", "42b1f2be8702484d3ae6238daab392622f54bd0d264966700f1f28f52596e326", "bb9afbd48717f92d59e07da35fb694b83d40d6edb63eb9033c2ee4174137d195"),
-    ("amd64", "x86_64", "91c159015e7d8aaff22153b9fd18749a0c7258d6f252ea344ecace975ce17413", "1c5aa8e8a7006e4093560fe48505fd1587de29210879e806822cb1094b334413"),
-    ("armv7", "armeabi-v7a", "cbac13a26ab77ce80871a064783a02246a856a20ab7435fe301fa1665e99acf4", "10e85ebad5380e5cdcb4028b6ba40910593bc9c37ce6b50e9f3a21adfca1408d"),
+    ("arm64-v8", "arm64-v8a", "48a71fc6a68e2909587176e0ab7185d8f2fac298fa96ccdacf30ea86ab2359b5", "1369bebba2b7a6fe971fe6ece0cb5aa18c81e49c89dd8340f43e5e7583d3da36"),
+    ("amd64", "x86_64", "99ce9a0226e12c718e749436d7ae0f35300b6e19f757edd09994efd1eab5d2ff", "070332fedbc1268df6f1d6f329a072b14b1ba8b102cd45465c3681bd12682fed"),
+    ("armv7", "armeabi-v7a", "a4959825f5af98f5a60c7b6ab0d23e766d647d17795315e3ac57b5b5bed918e7", "5047466f174206ef718a505f09652ca8f17c1f126c4a60639dc1208be990c58d"),
 ]
 XRAY_ASSETS = {
-    "windows": [("Xray-windows-64.zip", "d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad", "xray.exe", "15c2d007954ac53ba69b80ec91242786b3c0b71d52649165b4ca1d5cc96ef8f1", "")],
+    "windows": [("Xray-windows-64.zip", "1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d", "xray.exe", "1ca7a2cf61ba2c5d20b21a80d405b57933939751081cb289f07bd8ddf7cc3185", "")],
     "android": [
-        ("Xray-android-arm64-v8a.zip", "57149ffd48b629c07bf76938e73ab2729fde5910091497eab3e93d1c190f4c1b", "xray", "19101a8191d6d606da975f719c8cdb80b8710b87ab17edc00ef74b9e39588714", "arm64-v8a"),
-        ("Xray-android-amd64.zip", "bfa1dd4cb3cd94f92af6c718ac6933cc84bd3ddd8343aa1e413162152930bee5", "xray", "26b2ac1e596242847a247df9e932ac480bf6072c5c686517f5a3017320895814", "x86_64"),
+        ("Xray-android-arm64-v8a.zip", "edcefc25b9b3195b11e18624c8269a969d6aabc39c6298a9a5ab29de15d46f3b", "xray", "dbfe83c136ebb58635f5ad4e21d1df077473aa6fc4bfa1b7ee193516d0af8255", "arm64-v8a"),
+        ("Xray-android-amd64.zip", "48c266cdb9660dade968814e2f91d84e6aff534b7c3762ca3e385fb8aa475bd8", "xray", "63ba44d391e1bfd4061fad9584ed171671b5928b91128001bf4921e8cb9b46aa", "x86_64"),
     ],
 }
 
@@ -62,7 +64,7 @@ def install(platform: str):
     target.mkdir(parents=True, exist_ok=True)
     cached = WINDOWS_FILES if platform == "windows" else {"libbox.aar": info["sha256"]}
     if cached_files(target, cached) and (ROOT / "assets/licenses/sing-box-LICENSE").is_file():
-        print(f"Cached sing-box 1.14.0 for {platform}, SHA-256 verified")
+        print(f"Cached sing-box {SING_BOX_VERSION} for {platform}, SHA-256 verified")
         return
     path = target / ("core-download.zip" if platform == "windows" else "libbox.aar.download")
     request = urllib.request.Request(info["url"], headers={"User-Agent": "LunarisVPN-build/0.1"})
@@ -80,9 +82,8 @@ def install(platform: str):
         raise RuntimeError("Release asset SHA-256 mismatch; nothing was installed")
     if platform == "windows":
         with zipfile.ZipFile(path) as archive:
-            expected = "sing-box-1.14.0-windows-amd64/sing-box.exe"
-            (target / "sing-box.exe").write_bytes(archive.read(expected))
-            (target / "libcronet.dll").write_bytes(archive.read("sing-box-1.14.0-windows-amd64/libcronet.dll"))
+            for name in WINDOWS_FILES:
+                (target / name).write_bytes(archive.read(f"{SING_BOX_WINDOWS}/{name}"))
             notices = ROOT / "assets/licenses"
             notices.mkdir(parents=True, exist_ok=True)
             for name in archive.namelist():
@@ -95,7 +96,7 @@ def install(platform: str):
             if not required.issubset(archive.namelist()):
                 raise RuntimeError("AAR does not contain the required ABI or Java API")
         path.replace(target / "libbox.aar")
-    print(f"Installed sing-box 1.14.0 for {platform}, SHA-256 verified")
+    print(f"Installed sing-box {SING_BOX_VERSION} for {platform}, SHA-256 verified")
 
 
 def install_xray(platform: str):
