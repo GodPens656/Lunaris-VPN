@@ -365,12 +365,16 @@ pub fn mihomo_proxy(p: &Profile) -> Result<Value> {
             proxy["alpn"] = a.clone();
         }
         if tls.get("utls").is_some() {
-            proxy["client-fingerprint"] =
-                if tls.get("reality").is_some() && p.options["support-x25519mlkem768"] == true {
-                    json!("chrome")
-                } else {
-                    tls["utls"]["fingerprint"].clone()
-                };
+            let fingerprint = &tls["utls"]["fingerprint"];
+            // The pinned uTLS Firefox 148 and Chrome 133 templates both offer X25519MLKEM768.
+            proxy["client-fingerprint"] = if tls.get("reality").is_some()
+                && p.options["support-x25519mlkem768"] == true
+                && fingerprint != "firefox"
+            {
+                json!("chrome")
+            } else {
+                fingerprint.clone()
+            };
         }
         if let Some(r) = tls.get("reality") {
             let mut r = json!({"public-key":r["public_key"],"short-id":r["short_id"]});

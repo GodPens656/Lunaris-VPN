@@ -20,7 +20,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     net::windows::named_pipe::ServerOptions,
     process::{Child, Command},
-    sync::Mutex,
+    sync::{watch, Mutex},
     task::JoinHandle,
 };
 use windows_sys::Win32::{
@@ -435,6 +435,7 @@ struct Session {
     proxy: Option<Proxy>,
     api: Option<CoreApi>,
     started: Option<Instant>,
+    http_checks: Option<(u16, watch::Sender<()>)>,
     state: CoreState,
 }
 impl Session {
@@ -447,10 +448,12 @@ impl Session {
             proxy: (!probe).then(|| Proxy::new(directory)),
             api: None,
             started: None,
+            http_checks: None,
             state: CoreState::default(),
         }
     }
     async fn stop(&mut self) -> Result<()> {
+        self.http_checks = None;
         if let Some(CoreApi::FlClash(mut core)) = self.api.take() {
             core.stop().await;
             drop(core);
@@ -780,6 +783,7 @@ impl WindowsHost {
             }
         }
         session.started = Some(Instant::now());
+        session.http_checks = Some((settings.mixed_port, watch::channel(()).0));
         session.state = CoreState {
             status: "connected".into(),
             ..Default::default()
@@ -1018,6 +1022,94 @@ async fn xray_traffic(exe: &Path, api: &str) -> Result<(u64, u64)> {
     }
     Ok((upload, download))
 }
+async fn check_http_sites(port: u16) -> Result<Value> {
+    let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
+        .map_err(|_| "Некорректный адрес локального прокси.")?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .proxy(proxy)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| "Не удалось начать проверку сайтов.")?;
+    let client = &client;
+    let checks = ["yandex.ru", "youtube.com", "google.com", "github.com"];
+    let results = futures_util::future::join_all(checks.into_iter().map(|domain| async move {
+        match client.get(format!("http://{domain}/")).send().await {
+            Ok(response) => json!({"domain":domain,"status":response.status().as_u16()}),
+            Err(error) => json!({"domain":domain,"error":if error.is_timeout() { "timeout" } else { "unreachable" }}),
+        }
+    }))
+    .await;
+    Ok(json!(results))
+}
+
+#[cfg(test)]
+mod http_check_tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn sites_use_socks_and_report_the_first_http_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let proxy = tokio::spawn(async move {
+            for _ in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut greeting = [0; 3];
+                socket.read_exact(&mut greeting).await.unwrap();
+                assert_eq!(greeting, [5, 1, 0]);
+                socket.write_all(&[5, 0]).await.unwrap();
+                let mut request = [0; 5];
+                socket.read_exact(&mut request).await.unwrap();
+                assert_eq!(&request[..4], &[5, 1, 0, 3]);
+                let mut host = vec![0; request[4] as usize];
+                socket.read_exact(&mut host).await.unwrap();
+                assert_eq!(socket.read_u16().await.unwrap(), 80);
+                socket
+                    .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                    .await
+                    .unwrap();
+
+                let mut input = BufReader::new(&mut socket);
+                let mut line = String::new();
+                input.read_line(&mut line).await.unwrap();
+                assert_eq!(line, "GET / HTTP/1.1\r\n");
+                loop {
+                    line.clear();
+                    if input.read_line(&mut line).await.unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let response = match host.as_slice() {
+                    b"yandex.ru" => "302 Found\r\nLocation: https://yandex.ru/",
+                    b"youtube.com" => "403 Forbidden",
+                    b"google.com" => "200 OK",
+                    b"github.com" => continue,
+                    other => panic!("Unexpected request to {other:?}"),
+                };
+                socket
+                    .write_all(format!("HTTP/1.1 {response}\r\nContent-Length: 0\r\n\r\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            check_http_sites(port).await.unwrap(),
+            json!([
+                {"domain":"yandex.ru","status":302},
+                {"domain":"youtube.com","status":403},
+                {"domain":"google.com","status":200},
+                {"domain":"github.com","error":"unreachable"},
+            ])
+        );
+        proxy.await.unwrap();
+    }
+}
+
 #[async_trait]
 impl Host for WindowsHost {
     async fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
@@ -1025,6 +1117,21 @@ impl Host for WindowsHost {
     }
     async fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         dpapi(data, true)
+    }
+    async fn check_http_sites(&self) -> Result<Value> {
+        let (port, mut connection) = self
+            .session
+            .lock()
+            .await
+            .http_checks
+            .as_ref()
+            .map(|(port, session)| (*port, session.subscribe()))
+            .ok_or("Подключите VPN, чтобы проверить сайты.")?;
+        tokio::select! {
+            biased;
+            _ = connection.changed() => Err("Подключение завершилось во время проверки.".into()),
+            results = check_http_sites(port) => results,
+        }
     }
     async fn connect(&self, p: &Profile, s: &Settings) -> Result<CoreState> {
         let mut session = self.session.lock().await;

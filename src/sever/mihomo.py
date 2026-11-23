@@ -10,10 +10,9 @@ MIHOMO_VERSION = "1.19.34"
 def effective_client_fingerprint(profile: Profile) -> str | None:
     tls = profile.outbound.get("tls", {})
     fingerprint = tls.get("utls", {}).get("fingerprint")
-    # Chrome Auto offers X25519MLKEM768. The support flag only
-    # preserves an existing key share.
-    # Keep absent/false hints unchanged for older REALITY servers.
-    if "reality" in tls and profile.options.get("support-x25519mlkem768") is True:
+    # The pinned uTLS Firefox 148 and Chrome 133 templates both offer X25519MLKEM768.
+    if ("reality" in tls and profile.options.get("support-x25519mlkem768") is True
+            and fingerprint != "firefox"):
         return "chrome"
     return fingerprint
 

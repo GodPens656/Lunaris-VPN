@@ -20,6 +20,7 @@ paths.tray='<path d="M12 3v11m-4-4 4 4 4-4M4 15v5h16v-5"/>';
 const nav = [['home','Подключение','shield'],['servers','Серверы','servers'],['subscriptions','Подписки','link'],['settings','Настройки','settings'],['logs','Журнал','log']];
 const connectionModes = [['proxy','Системный прокси'],['tun','TUN · весь трафик устройства']];
 const latencyMethods = [['proxy','PROXY GET · через подключённый VPN'],['tcp','TCP/UDP · до сервера'],['icmp','ICMP']];
+const httpSites = ['yandex.ru','youtube.com','google.com','github.com'];
 // Provider addresses: https://developers.cloudflare.com/1.1.1.1/ip-addresses/
 // https://developers.google.com/speed/public-dns/docs/using and https://dns.yandex.ru/
 const dnsPresets = {
@@ -32,6 +33,7 @@ let customDns = false;
 const statusNames = {disconnected:'Отключено',connecting:'Подключается…',connected:'Подключено',disconnecting:'Отключается…',error:'Ошибка подключения'};
 let state = null, tab = 'home', busy = false, search = '', source = 'all', bulkMethod = 'tcp', lastSignature = '', toastTimer, dialogSubmit, startupSeen = false;
 let subscriptionsBusy = false;
+let httpCheck = null;
 let appUpdateChecking=false,appUpdateCheckedAt=null,pendingAppUpdate=null,appUpdatePromptedVersion=null;
 const subscriptionRequests = new Set();
 const settingsDrafts = new Map(), settingsTimers = new Map();
@@ -130,14 +132,18 @@ function home(){
  const p=state.profiles.find(p=>p.key===state.selected), android=state.platform==='android';
  const profiles=homeProfiles(),subscription=state.subscriptions.find(s=>s.id===p?.source_id);
  return `<section class="card connect-card">
-   <div class="connection-overview">
-     <div>
-       <h2 class="connection-status" id="connection-status" role="status" aria-live="polite"></h2>
-       <div class="connection-latency"><button type="button" class="text-button" id="measure-selected" data-action="measure-selected">${icon('speed')}Проверить задержку</button><span class="connection-latency-result" role="status" aria-live="polite" aria-atomic="true"><strong id="stat-latency">—</strong><span id="latency-method"></span></span></div>
+   <div class="connection-overview${android?'':' windows'}">
+     <div class="connection-latency">
+       <button type="button" class="icon-button" id="measure-selected" data-action="measure-selected" aria-label="Проверить задержку">${icon('speed')}</button>
+       <span class="connection-latency-result" role="status" aria-live="polite" aria-atomic="true"><strong id="stat-latency">—</strong></span>
      </div>
      <div class="orb-wrap">
-       <button type="button" class="connect-orb ${state.status}" data-action="toggle" aria-label="Подключить VPN" ${!p?'disabled':''}>${icon('power')}<span id="orb-label" class="orb-label" aria-hidden="true">Подключить VPN</span></button>
+       <button type="button" class="connect-orb ${state.status}" data-action="toggle" aria-label="Подключить VPN" ${!p?'disabled':''}>${icon('power')}</button>
      </div>
+     ${android?'':`<div class="connection-sites">
+       <button type="button" class="button" id="check-http-sites" data-action="check-http-sites">Проверить HTTP</button>
+       <dl id="http-site-results" class="http-site-results" aria-label="Результаты проверки HTTP" aria-live="polite"></dl>
+     </div>`}
    </div>
    <div class="selected-server"><span class="server-avatar">${icon('servers')}</span><div class="server-meta"><div class="server-name">${p?nameHtml(p.name):'Сервер не выбран'}</div><div class="caption">${p?esc(p.protocol.toUpperCase()):'Начните с добавления подписки'}</div></div><button class="text-button" data-tab="servers">Изменить ${icon('arrow')}</button></div>
  </section>
@@ -221,6 +227,34 @@ function render(){
  updateSettingsSaveStatus();
 }
 function signature(){return state?JSON.stringify([state.profiles,state.subscriptions,state.selected,state.latency,state.measuring,state.settings.auto_sort_ping,state.error,state.subscriptions.map(s=>{const expiry=subscriptionExpiry(s);return expiry?[expiry.status,expiry.status==='soon'?expiry.days:0]:null;})]):'';}
+function updateHttpSites(connected){
+ const button=$('#check-http-sites');
+ if(!button)return;
+ const pending=!!httpCheck?.pending;
+ const label=pending?'Проверяем…':'Проверить HTTP';
+ if(button.textContent!==label)button.textContent=label;
+ button.disabled=!connected||busy||pending;
+ button.title=connected?'HTTP GET по текущим правилам маршрутизации':'Подключите VPN, чтобы проверить сайты';
+ button.setAttribute('aria-busy',String(pending));
+ const output=$('#http-site-results');
+ const items=httpSites.map(domain=>{
+  const result=httpCheck?.results?.find(item=>item.domain===domain);
+  const status=Number.isInteger(result?.status)?result.status:null;
+  const text=status!==null?`HTTP ${status}`:result?.error==='timeout'?'Тайм-аут':result?'Нет ответа':pending?'…':'—';
+  const color=status>=200&&status<400?'good':result?'error':'';
+  return `<div><dt>${domain}</dt><dd class="${color}">${text}</dd></div>`;
+ }).join('');
+ if(output.innerHTML!==items)output.innerHTML=items;
+}
+async function checkHttpSites(){
+ if(state?.platform!=='windows'||state.status!=='connected'||busy||httpCheck?.pending)return;
+ const check={pending:true,results:null};
+ httpCheck=check;
+ updateStatus();
+ try{check.results=await rpc('check_http_sites');}
+ catch(e){if(httpCheck===check)toast(typeof e==='string'?e:e.message||'Не удалось проверить сайты.');}
+ finally{check.pending=false;updateStatus();}
+}
 function updateStatus(){
  if(!state)return;const s=state.status,running=['connected','connecting','disconnecting'].includes(s);
  const updateButton=$('[data-action="check-app-update"]');
@@ -231,22 +265,18 @@ function updateStatus(){
  const trayButton=$('[data-action="tray"]');if(trayButton){trayButton.hidden=state.platform!=='windows';trayButton.innerHTML=icon('tray');}
  $('#status-pill').textContent=statusNames[s]||s;$('#status-pill').className='status-pill '+s;
  if(tab==='home'){
-  const connectionStatus=$('#connection-status'),label=statusNames[s]||s;
-  if(connectionStatus.textContent!==label)connectionStatus.textContent=label;
   const connected=s==='connected',result=connected?state.latency[state.selected]:null;
+  updateHttpSites(connected);
   const measureButton=$('#measure-selected');measureButton.disabled=!connected||!state.selected||state.measuring||busy;
   measureButton.title=connected?'Измерить задержку подключённого сервера':'Подключите VPN, чтобы проверить задержку';
   const orb=$('.connect-orb'),orbClass='connect-orb '+s;
   if(orb.className!==orbClass)orb.className=orbClass;
   orb.disabled=!state.selected||s==='disconnecting'||busy;
-  const orbLabel=s==='connecting'?'Отменить подключение VPN':running?'Отключить VPN':'Подключить VPN';
+  const orbLabel=s==='connecting'?'Отменить подключение VPN':s==='disconnecting'?'Отключается…':running?'Отключить VPN':'Подключить VPN';
   orb.setAttribute('aria-label',orbLabel);
-  const orbCaption=$('#orb-label');
-  const caption=s==='connecting'?'Отменить':s==='disconnecting'?'Отключается…':orbLabel;
-  if(orbCaption&&orbCaption.textContent!==caption)orbCaption.textContent=caption;
+  orb.title=orbLabel;
   orb.setAttribute('aria-pressed',String(running));
   $('#stat-up').textContent=bytes(state.stats.upload);$('#stat-down').textContent=bytes(state.stats.download);$('#stat-time').textContent=duration(state.stats.duration);
-  $('#latency-method').textContent={tcp:'TCP/UDP',icmp:'ICMP',proxy:'GET'}[state.settings.latency_method];
   const latency=$('#stat-latency');latency.textContent=result?.label||(connected&&state.measuring?'Проверяем…':'—');
   latency.className=result?.error?'error':result?.milliseconds!=null?'good':'';
   measureButton.setAttribute('aria-busy',String(connected&&state.measuring));
@@ -255,7 +285,9 @@ function updateStatus(){
  if($('#measure-progress'))$('#measure-progress').textContent=state.measuring?`Проверено ${Object.keys(state.latency).length} из ${state.measure_total}`:'';
  if(tab==='logs'&&$('#log-lines'))$('#log-lines').textContent=state.logs.join('\n')||'Записей пока нет.';
 }
-function accept(value){if(value?.snapshot)value=value.snapshot;if(!value?.profiles)return;const old=lastSignature;state=value;
+function accept(value){if(value?.snapshot)value=value.snapshot;if(!value?.profiles)return;const old=lastSignature;
+ if(value.status!=='connected'||state?.active!==value.active)httpCheck=null;
+ state=value;
  if(!$('#view').dataset.ready){$('#view').dataset.ready='1';render();}
  else if(tab!=='settings'&&old!==signature())render();else updateStatus();
 }
@@ -383,6 +415,7 @@ document.addEventListener('click',async e=>{
  }
  if(target.dataset.color){appearance.accent=target.dataset.color;applyAppearance();return;}
  const a=target.dataset.action;
+ if(a==='check-http-sites'){await checkHttpSites();return;}
  if(a==='check-app-update'){await checkAppUpdate(true);return;}
  if(a==='tray'){try{await flushSettings();await native()('hide_to_tray');}catch(e){toast(typeof e==='string'?e:e.message);}return;}
  if(a==='retry'){try{accept(await rpc('snapshot'));}catch(e){toast(typeof e==='string'?e:e.message);}return;}

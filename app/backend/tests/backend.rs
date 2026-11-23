@@ -110,6 +110,27 @@ fn strict_json_rejects_duplicates_and_import_limits() {
     assert!(parser::import(&"x".repeat(parser::MAX_BODY + 1)).is_err());
 }
 #[test]
+fn mihomo_reality_preserves_firefox_with_hybrid_key_exchange() {
+    let link = "vless\\://11111111-1111-4111-8111-111111111111@example.com:5555?encryption=none&fp=firefox&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&security=reality&sid=a2&sni=example.net&spx=%2Fsynthetic&support-x25519mlkem768=true&type=tcp";
+    let settings = Settings {
+        core: "mihomo".into(),
+        ..Default::default()
+    };
+    for (fingerprint, expected) in [("firefox", "firefox"), ("ios", "chrome")] {
+        let link = link.replace("fp=firefox", &format!("fp={fingerprint}"));
+        let profile = parser::parse_uri(&link, None).unwrap();
+        let windows = config::mihomo(&profile, &settings, "api", None).unwrap();
+        let android = config::android(&profile, &settings, "api", "local").unwrap();
+        let proxy = &windows["proxies"][0];
+        assert_eq!(proxy, &android["sever_mihomo"]["proxies"][0]);
+        assert_eq!(proxy["client-fingerprint"], expected);
+        assert_eq!(proxy["reality-opts"]["support-x25519mlkem768"], true);
+        assert_eq!(proxy["reality-opts"]["short-id"], "a2");
+        assert!(proxy.get("encryption").is_none());
+        assert_eq!(profile.options["spx"], "/synthetic");
+    }
+}
+#[test]
 fn android_sidecars_use_local_binding_gvisor_and_routing() {
     let p = parser::parse_uri(&format!("{}&mode=multi", uri()), None).unwrap();
     let settings = Settings {

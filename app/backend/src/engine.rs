@@ -42,6 +42,9 @@ pub trait Host: Send + Sync {
     async fn probe(&self, _profile: &Profile, _settings: &Settings) -> Latency {
         Latency::error("Проверка через прокси недоступна")
     }
+    async fn check_http_sites(&self) -> Result<Value> {
+        Err("Проверка сайтов по HTTP доступна на Windows.".into())
+    }
 }
 pub fn secret() -> String {
     let mut bytes = [0u8; 32];
@@ -393,6 +396,9 @@ impl Engine {
         }
         if method == "take_import_link" {
             return self.host.take_import_link().await;
+        }
+        if method == "check_http_sites" {
+            return self.host.check_http_sites().await;
         }
         if method == "check_app_update" {
             let _check = self.update_check_gate.lock().await;

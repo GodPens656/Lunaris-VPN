@@ -80,6 +80,9 @@ Keystore и Binder; сами VPN-ядра сохранены без измене
 На главном экране Windows способ подключения выбирается селектором:
 «Системный прокси» или «TUN · весь трафик устройства». Выбор общий с настройками
 и применяется при следующем подключении; для TUN нужны права администратора.
+Кнопка «Проверить HTTP» отправляет GET-запросы к yandex.ru, youtube.com,
+google.com и github.com через ядро активного подключения с его правилами
+маршрутизации. Для каждого сайта показан первый HTTP-код или ошибка запроса.
 Поддерживаются VLESS/Reality, Trojan, Hysteria2, XHTTP и gRPC,
 TCP/UDP, ICMP, PROXY GET и импорт `lunaris://`.
 
@@ -411,7 +414,7 @@ trojan://synthetic-password@example.com:443?sni=example.com#Example
 
 Назначение `spx` проверено по [исходникам Xray Reality](https://github.com/XTLS/Xray-core/blob/v26.11.9/transport/internet/reality/reality.go#L228) и [Mihomo Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go#L134).
 
-Для Reality с явным `support-x25519mlkem768=true` адаптер Mihomo использует `client-fingerprint: chrome`. Так ядро отправляет X25519MLKEM768 даже для профилей, чей fingerprint не включает эту группу: переключатель Mihomo сохраняет имеющийся key share, но не добавляет новый. Замена применяется при построении конфигурации Mihomo и записывается в журнал. При отсутствующем или ложном флаге используется fingerprint из профиля. [Шаблоны uTLS](https://github.com/MetaCubeX/utls/blob/v1.9.0-alpha.1/u_common.go), [обработка Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go).
+При `support-x25519mlkem768=true` адаптер Mihomo сохраняет `fp=firefox` и `fp=chrome`. Оба шаблона uTLS уже включают X25519MLKEM768. Для остальных fingerprint используется Chrome, чтобы отправить гибридный ключ. При отсутствующем или ложном флаге используется fingerprint из профиля. [Шаблоны uTLS](https://github.com/MetaCubeX/utls/blob/v1.9.0-alpha.1/u_parrots.go), [обработка Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go).
 
 ```powershell
 # Получить FlClashCore для Windows или собрать библиотеку для Android
