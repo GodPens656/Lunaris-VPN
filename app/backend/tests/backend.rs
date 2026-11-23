@@ -202,7 +202,11 @@ fn custom_bypass_routes_work_alone_and_with_russian_zones_on_both_platforms() {
             let android = config::android(&profile, &settings, "api", "local").unwrap();
             let xray = parser::parse_uri(&format!("{}&mode=multi", uri()), None).unwrap();
             let bridge = config::android(&xray, &settings, "api", "local").unwrap();
-            for config in [&sing, &android, &bridge] {
+            let mut sing_box_configs = vec![&sing, &bridge];
+            if core == "sing-box" {
+                sing_box_configs.push(&android);
+            }
+            for config in sing_box_configs {
                 assert_eq!(
                     config["route"]["rules"][2]["domain_suffix"],
                     json!(expected)
@@ -222,6 +226,8 @@ fn custom_bypass_routes_work_alone_and_with_russian_zones_on_both_platforms() {
             assert_eq!(mihomo["sniffer"]["enable"], true);
             if core == "mihomo" {
                 assert_eq!(android["sever_mihomo"]["rules"], json!(rules));
+                assert_eq!(android["sever_mihomo"]["secret"], "api");
+                assert!(android.get("outbounds").is_none());
             }
         }
     }
@@ -231,6 +237,43 @@ fn custom_bypass_routes_work_alone_and_with_russian_zones_on_both_platforms() {
     let mihomo = config::mihomo(&profile, &settings, "api", None).unwrap();
     assert_eq!(mihomo["rules"], json!(["MATCH,proxy"]));
     assert!(mihomo.get("sniffer").is_none());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires the pinned Windows core binaries in assets/core"]
+async fn bundled_cores_start_report_traffic_and_release_ports() {
+    use lunaris_backend::windows::{free_port, WindowsHost};
+
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let profile = parser::parse_uri(
+        "vless://b87a2fde-5f5a-458a-baad-f9c179530af1@127.0.0.1:65432",
+        None,
+    )
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    for core in ["mihomo", "sing-box", "xray"] {
+        let log = Arc::new(std::sync::Mutex::new(Default::default()));
+        let host =
+            WindowsHost::isolated_probe(directory.path().join(core), assets.clone(), log.clone());
+        let mixed_port = free_port(&[]).unwrap();
+        let settings = Settings {
+            core: core.into(),
+            mixed_port,
+            api_port: free_port(&[mixed_port]).unwrap(),
+            verify_connection: false,
+            ..Default::default()
+        };
+        let state = host
+            .connect(&profile, &settings)
+            .await
+            .unwrap_or_else(|e| panic!("{core}: {e}\n{:?}", log.lock().unwrap().lines));
+        assert_eq!(state.status, "connected");
+        let state = host.snapshot().await.unwrap();
+        assert_eq!(state.status, "connected", "{core}: {:?}", state.error);
+        assert_eq!(host.disconnect().await.unwrap().status, "disconnected");
+        assert!(std::net::TcpListener::bind(("127.0.0.1", mixed_port)).is_ok());
+    }
 }
 
 #[tokio::test]

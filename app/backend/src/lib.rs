@@ -2,6 +2,8 @@
 pub mod bootstrap;
 pub mod config;
 pub mod engine;
+#[cfg(windows)]
+mod flclash;
 pub mod latency;
 pub mod models;
 pub mod parser;

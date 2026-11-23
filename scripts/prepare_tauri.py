@@ -18,16 +18,15 @@ def prepare():
 
     native = ROOT / "app/plugins/lunaris-native/android"
     legacy = ROOT / "extensions/sever_vpn/src/flutter/sever_vpn/android"
-    kotlin = native / "src/main/java/dev/sever/vpn"
-    for source in (legacy / "src/main/kotlin/dev/sever/vpn").glob("*.kt"):
-        if source.name != "SeverVpnPlugin.kt":
-            shutil.copy2(source, kotlin / source.name)
-    shutil.copytree(legacy / "src/main/res", native / "src/main/res", dirs_exist_ok=True)
-    manifest = (legacy / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
-    manifest = manifest.replace("        <service", '        <activity android:name="dev.sever.vpn.VpnPermissionActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" />\n        <service', 1)
-    (native / "src/main/AndroidManifest.xml").write_text(manifest, encoding="utf-8")
-    for name in ["libs", "src/main/jniLibs"]:
-        shutil.copytree(legacy / name, native / name, dirs_exist_ok=True)
+    # The Android Tauri service and manifest are maintained in the plugin.
+    # Stage only the prebuilt assets shared with the legacy Android build.
+    for relative in ("libs/libbox.aar", "src/main/jniLibs/arm64-v8a/libxray.so"):
+        source = legacy / relative
+        if source.is_file():
+            target = native / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    (native / "src/main/jniLibs/arm64-v8a/libmihomo.so").unlink(missing_ok=True)
     # Runtime contains only the verified VPN cores. Application code is linked
     # into Tauri from app/backend on both platforms.
     runtime = ROOT / "build/tauri-runtime-rust/assets"

@@ -2,6 +2,7 @@
 use crate::{
     config,
     engine::{secret, Host, Log},
+    flclash,
     latency::{self, Latency},
     models::*,
     storage::atomic_write,
@@ -17,6 +18,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
+    net::windows::named_pipe::ServerOptions,
     process::{Child, Command},
     sync::Mutex,
     task::JoinHandle,
@@ -412,15 +414,26 @@ pub fn free_port(excluded: &[u16]) -> Result<u16> {
     }
     Err("Не удалось выбрать свободный TCP/UDP-порт.".into())
 }
+enum CoreApi {
+    FlClash(flclash::Core),
+    Xray {
+        executable: PathBuf,
+        address: String,
+    },
+    Clash {
+        client: reqwest::Client,
+        base: String,
+        secret: String,
+    },
+}
+
 struct Session {
     children: Vec<Child>,
     job: Option<Job>,
     paths: Vec<PathBuf>,
     readers: Vec<JoinHandle<()>>,
     proxy: Option<Proxy>,
-    client: Option<reqwest::Client>,
-    api: String,
-    secret: String,
+    api: Option<CoreApi>,
     started: Option<Instant>,
     state: CoreState,
 }
@@ -432,14 +445,19 @@ impl Session {
             paths: Vec::new(),
             readers: Vec::new(),
             proxy: (!probe).then(|| Proxy::new(directory)),
-            client: None,
-            api: String::new(),
-            secret: String::new(),
+            api: None,
             started: None,
             state: CoreState::default(),
         }
     }
     async fn stop(&mut self) -> Result<()> {
+        if let Some(CoreApi::FlClash(mut core)) = self.api.take() {
+            core.stop().await;
+            drop(core);
+            if let Some(child) = self.children.last_mut() {
+                let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            }
+        }
         self.job.take();
         for child in &mut self.children {
             let _ = child.kill().await;
@@ -454,7 +472,6 @@ impl Session {
         for path in self.paths.drain(..) {
             let _ = fs::remove_file(path);
         }
-        self.client = None;
         self.started = None;
         restore?;
         self.state = CoreState::default();
@@ -499,22 +516,73 @@ impl Session {
         value: &Value,
         log: &Log,
     ) -> Result<PathBuf> {
+        let path = directory.join(format!("session-{label}-{}.json", uuid::Uuid::new_v4()));
+        self.write_config(&path, value, log)?;
+        Ok(path)
+    }
+    fn write_config(&mut self, path: &Path, value: &Value, log: &Log) -> Result<()> {
         log.lock()
             .unwrap_or_else(|e| e.into_inner())
             .register(value);
-        let path = directory.join(format!("session-{label}-{}.json", uuid::Uuid::new_v4()));
-        atomic_write(&path, value.to_string().as_bytes())?;
-        self.paths.push(path.clone());
-        Ok(path)
+        atomic_write(path, value.to_string().as_bytes())?;
+        self.paths.push(path.to_owned());
+        Ok(())
     }
     fn alive(&mut self) -> bool {
         self.children
             .iter_mut()
             .all(|c| matches!(c.try_wait(), Ok(None)))
     }
+    async fn traffic(&mut self) -> Result<Stats> {
+        if !self.alive() {
+            return Err("Ядро аварийно завершилось. Соединение остановлено.".into());
+        }
+        let (upload, download) = match self.api.as_mut().ok_or("API ядра недоступен.")?
+        {
+            CoreApi::FlClash(core) => tokio::time::timeout(Duration::from_secs(2), core.traffic())
+                .await
+                .map_err(|_| "Потеряна связь с FlClashCore.")??,
+            CoreApi::Xray {
+                executable,
+                address,
+            } => xray_traffic(executable, address).await?,
+            CoreApi::Clash {
+                client,
+                base,
+                secret,
+            } => {
+                let response = client
+                    .get(format!("{base}/connections"))
+                    .bearer_auth(secret)
+                    .timeout(Duration::from_secs(2))
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .map_err(|_| "Потеряна связь с ядром. Соединение остановлено.")?;
+                let value: Value = response
+                    .json()
+                    .await
+                    .map_err(|_| "Некорректная статистика ядра.")?;
+                (
+                    value["uploadTotal"]
+                        .as_u64()
+                        .ok_or("Некорректная статистика ядра.")?,
+                    value["downloadTotal"]
+                        .as_u64()
+                        .ok_or("Некорректная статистика ядра.")?,
+                )
+            }
+        };
+        Ok(Stats {
+            upload,
+            download,
+            duration: self.started.map_or(0, |time| time.elapsed().as_secs()),
+        })
+    }
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        self.api.take();
         self.job.take();
         for child in &mut self.children {
             let _ = child.start_kill();
@@ -556,6 +624,11 @@ impl WindowsHost {
         let runtime = directory.join("runtime");
         fs::create_dir_all(&runtime).map_err(|_| "Не удалось создать каталог приложения.")?;
         restore_proxy(&runtime.join("proxy.dpapi"))?;
+        match fs::remove_file(runtime.join("flclash/config.yaml")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("Не удалось удалить старую конфигурацию FlClashCore.".into()),
+        }
         for path in fs::read_dir(&runtime)
             .map_err(|_| "Не удалось открыть каталог приложения.")?
             .flatten()
@@ -599,6 +672,120 @@ impl WindowsHost {
             PathBuf::from(path)
         }
     }
+    async fn start_xray(
+        &self,
+        session: &mut Session,
+        exe: &Path,
+        profile: &Profile,
+        settings: &Settings,
+        hosts: Option<&Value>,
+    ) -> Result<()> {
+        let verify_port = (!self.probe && settings.verify_connection)
+            .then(|| free_port(&[settings.mixed_port, settings.api_port]))
+            .transpose()?;
+        let config = config::xray_desktop(profile, settings, hosts, verify_port)?;
+        if settings.mode == "tun" && !exe.with_file_name("wintun.dll").is_file() {
+            return Err("Для TUN в режиме Xray нужен wintun.dll из комплекта ядер.".into());
+        }
+        check_xray(exe, &self.log).await?;
+        let path = session.config(&self.directory, "xray", &config, &self.log)?;
+        let path = path.to_string_lossy();
+        checked(exe, &["run", "-test", "-c", &path], &self.log).await?;
+        session.spawn(exe, &["run", "-c", &path], &self.log).await?;
+        let api = format!("127.0.0.1:{}", settings.api_port);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            if !session.alive() {
+                return Err("Xray завершился во время запуска. Проверьте журнал.".into());
+            }
+            if tokio::net::TcpStream::connect(("127.0.0.1", settings.mixed_port))
+                .await
+                .is_ok()
+                && xray_traffic(exe, &api).await.is_ok()
+            {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err("Xray не открыл локальный прокси и API статистики.".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if let Some(port) = verify_port {
+            let mut verification = settings.clone();
+            verification.mixed_port = port;
+            if latency::proxy(&verification).await.error.is_some() {
+                return Err("Сервер не прошёл проверку HTTPS через Xray.".into());
+            }
+        }
+        session.api = Some(CoreApi::Xray {
+            executable: exe.to_owned(),
+            address: api,
+        });
+        Ok(())
+    }
+    async fn start_flclash(
+        &self,
+        session: &mut Session,
+        exe: &Path,
+        profile: &Profile,
+        settings: &Settings,
+        hosts: Option<&Value>,
+    ) -> Result<()> {
+        let home = if self.probe {
+            self.directory.clone()
+        } else {
+            self.directory.join("flclash")
+        };
+        fs::create_dir_all(&home).map_err(|_| "Не удалось создать каталог FlClashCore.")?;
+        let mut config = config::mihomo(profile, settings, "", hosts)?;
+        if let Some(map) = config.as_object_mut() {
+            map.remove("external-controller");
+            map.remove("secret");
+        }
+        session.write_config(&home.join("config.yaml"), &config, &self.log)?;
+        let address = format!(r"\\.\pipe\LunarisCore-{}", uuid::Uuid::new_v4());
+        let pipe = ServerOptions::new()
+            .first_pipe_instance(true)
+            .reject_remote_clients(true)
+            .create(&address)
+            .map_err(|_| "Не удалось создать именованный канал FlClashCore.")?;
+        session.spawn(exe, &[&address], &self.log).await?;
+        let pid = session
+            .children
+            .last()
+            .and_then(Child::id)
+            .ok_or("FlClashCore завершился.")?;
+        let mut core = flclash::Core::accept(pipe, pid, self.log.clone()).await?;
+        core.start(&home, &settings.probe_url).await?;
+        if tokio::net::TcpStream::connect(("127.0.0.1", settings.mixed_port))
+            .await
+            .is_err()
+        {
+            return Err("FlClashCore не открыл локальный прокси.".into());
+        }
+        if !self.probe && settings.verify_connection {
+            if let Err(error) = core.check(&settings.probe_url).await {
+                core.stop().await;
+                return Err(error);
+            }
+        }
+        session.api = Some(CoreApi::FlClash(core));
+        Ok(())
+    }
+
+    fn connected(&self, session: &mut Session, settings: &Settings) -> Result<CoreState> {
+        if settings.mode == "proxy" {
+            if let Some(proxy) = session.proxy.as_mut() {
+                proxy.apply(settings.mixed_port)?;
+            }
+        }
+        session.started = Some(Instant::now());
+        session.state = CoreState {
+            status: "connected".into(),
+            ..Default::default()
+        };
+        Ok(session.state.clone())
+    }
     async fn start(
         &self,
         session: &mut Session,
@@ -613,7 +800,12 @@ impl WindowsHost {
         }
         let s = &settings;
         let mihomo = s.core == "mihomo";
-        let exe = self.executable(s);
+        let flclash = mihomo && s.mihomo_path.is_empty();
+        let exe = match s.core.as_str() {
+            "xray" => self.assets.join("core/xray.exe"),
+            "mihomo" if flclash => self.assets.join("core/FlClashCore.exe"),
+            _ => self.executable(s),
+        };
         if !exe.is_file() {
             return Err(
                 "Ядро не найдено. Проверьте комплект приложения или путь в настройках.".into(),
@@ -621,6 +813,29 @@ impl WindowsHost {
         }
         if s.mode == "tun" && unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } == 0 {
             return Err("TUN требует запуска приложения от имени администратора.".into());
+        }
+        let a = std::net::TcpListener::bind(("127.0.0.1", s.mixed_port))
+            .map_err(|_| "Локальный порт занят. Измените порты в настройках.")?;
+        if !flclash {
+            std::net::TcpListener::bind(("127.0.0.1", s.api_port))
+                .map_err(|_| "Локальный порт управления занят.")?;
+        }
+        drop(a);
+        let hosts = if s.mode == "tun" {
+            Some(resolve(p, s, &self.log).await?)
+        } else {
+            None
+        };
+        restrict(&self.directory).await?;
+        session.job = Some(Job::new()?);
+        if s.core == "xray" {
+            self.start_xray(session, &exe, p, s, hosts.as_ref()).await?;
+            return self.connected(session, s);
+        }
+        if flclash {
+            self.start_flclash(session, &exe, p, s, hosts.as_ref())
+                .await?;
+            return self.connected(session, s);
         }
         let version = checked(&exe, &[if mihomo { "-v" } else { "version" }], &self.log).await?;
         if if mihomo {
@@ -632,36 +847,23 @@ impl WindowsHost {
         } {
             return Err("Версия ядра не совпадает с проверенным комплектом приложения.".into());
         }
-        let a = std::net::TcpListener::bind(("127.0.0.1", s.mixed_port))
-            .map_err(|_| "Локальный порт занят. Измените порты в настройках.")?;
-        let b = std::net::TcpListener::bind(("127.0.0.1", s.api_port))
-            .map_err(|_| "Локальный порт управления занят.")?;
-        drop((a, b));
-        let hosts = if s.mode == "tun" {
-            Some(resolve(p, s, &self.log).await?)
-        } else {
-            None
-        };
-        restrict(&self.directory).await?;
-        session.job = Some(Job::new()?);
         let secret = secret();
         let config = if mihomo {
             config::mihomo(p, s, &secret, hosts.as_ref())?
         } else {
-            let sidecar = if p.requires_xray() {
+            let sidecar = if let Some(mut config) =
+                config::xray_for_sing_box(p, &secret, s, hosts.as_ref())?
+            {
+                let port = free_port(&[s.mixed_port, s.api_port])?;
+                config["inbounds"][0]["port"] = json!(port);
                 let adjacent = exe.parent().unwrap_or(&self.assets).join("xray.exe");
                 let xray = if adjacent.is_file() {
                     adjacent
                 } else {
                     self.assets.join("core/xray.exe")
                 };
-                let version = checked(&xray, &["version"], &self.log).await?;
-                if !version.starts_with(&format!("Xray {} ", crate::XRAY)) {
-                    return Err(format!("Нужен Xray {} из проверенного комплекта ядер.", crate::XRAY));
-                }
-                let port = free_port(&[s.mixed_port, s.api_port])?;
+                check_xray(&xray, &self.log).await?;
                 let password = secret.clone();
-                let config = config::xray(p, port, &password, s, hosts.as_ref())?;
                 let path = session.config(&self.directory, "xray", &config, &self.log)?;
                 let path = path.to_string_lossy().to_string();
                 checked(&xray, &["run", "-test", "-c", &path], &self.log).await?;
@@ -758,21 +960,63 @@ impl WindowsHost {
                 );
             }
         }
-        if s.mode == "proxy" {
-            if let Some(proxy) = session.proxy.as_mut() {
-                proxy.apply(s.mixed_port)?;
+        session.api = Some(CoreApi::Clash {
+            client,
+            base: api,
+            secret,
+        });
+        self.connected(session, s)
+    }
+}
+
+async fn check_xray(exe: &Path, log: &Log) -> Result<()> {
+    let version = checked(exe, &["version"], log).await?;
+    if !version.starts_with(&format!("Xray {} ", crate::XRAY)) {
+        return Err(format!(
+            "Нужен Xray {} из проверенного комплекта ядер.",
+            crate::XRAY
+        ));
+    }
+    Ok(())
+}
+
+async fn xray_traffic(exe: &Path, api: &str) -> Result<(u64, u64)> {
+    let mut command = command(exe);
+    command.args([
+        "api",
+        "statsquery",
+        "-s",
+        api,
+        "-t",
+        "1",
+        "-pattern",
+        "inbound>>>",
+    ]);
+    let output = tokio::time::timeout(Duration::from_secs(2), command.output())
+        .await
+        .ok()
+        .and_then(std::result::Result::ok)
+        .filter(|output| output.status.success())
+        .ok_or("Потеряна связь с API статистики Xray.")?;
+    let value: Value =
+        serde_json::from_slice(&output.stdout).map_err(|_| "Некорректная статистика Xray.")?;
+    let mut upload: u64 = 0;
+    let mut download: u64 = 0;
+    if let Some(stats) = value["stat"].as_array() {
+        for stat in stats {
+            let amount = stat["value"]
+                .as_u64()
+                .or_else(|| stat["value"].as_str()?.parse().ok())
+                .unwrap_or(0);
+            let name = stat["name"].as_str().unwrap_or_default();
+            if name.ends_with(">>>traffic>>>uplink") {
+                upload = upload.saturating_add(amount);
+            } else if name.ends_with(">>>traffic>>>downlink") {
+                download = download.saturating_add(amount);
             }
         }
-        session.client = Some(client);
-        session.api = api;
-        session.secret = secret;
-        session.started = Some(Instant::now());
-        session.state = CoreState {
-            status: "connected".into(),
-            ..Default::default()
-        };
-        Ok(session.state.clone())
     }
+    Ok((upload, download))
 }
 #[async_trait]
 impl Host for WindowsHost {
@@ -806,14 +1050,13 @@ impl Host for WindowsHost {
     async fn snapshot(&self) -> Result<CoreState> {
         let mut session = self.session.lock().await;
         if session.state.status == "connected" {
-            let result=async{if !session.alive(){return Err("Ядро аварийно завершилось. Соединение остановлено, настройки прокси восстановлены.");}let client=session.client.as_ref().ok_or("API ядра недоступен.")?;let r=client.get(format!("{}/connections",session.api)).bearer_auth(&session.secret).timeout(Duration::from_secs(2)).send().await.map_err(|_|"Потеряна связь с ядром. Соединение остановлено.")?;if !r.status().is_success(){return Err("Потеряна связь с ядром. Соединение остановлено.");}let value=r.json::<Value>().await.map_err(|_|"Некорректная статистика ядра.")?;Ok(Stats{upload:value["uploadTotal"].as_u64().ok_or("Некорректная статистика ядра.")?,download:value["downloadTotal"].as_u64().ok_or("Некорректная статистика ядра.")?,duration:session.started.map(|t|t.elapsed().as_secs()).unwrap_or(0)})}.await;
-            match result {
+            match session.traffic().await {
                 Ok(stats) => session.state.stats = stats,
                 Err(e) => {
                     let cleanup = session.stop().await;
                     session.state = CoreState {
                         status: "error".into(),
-                        error: Some(cleanup.err().unwrap_or(e.into())),
+                        error: Some(cleanup.err().unwrap_or(e)),
                         stats: Default::default(),
                     };
                 }

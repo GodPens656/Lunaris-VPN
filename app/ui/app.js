@@ -3,6 +3,7 @@ const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const paths = {
  shield:'<path d="M12 3 4.5 6v5c0 5 7.5 10 7.5 10s7.5-5 7.5-10V6Z"/><path d="m9 12 2 2 4-4"/>',
+ power:'<path d="M12 3v8M7 6a8 8 0 1 0 10 0"/>',
  servers:'<rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M12 6.5h4M12 17.5h4"/>',
  link:'<path d="m10 13 4-4m-7 6-1 1a4 4 0 0 0 6 6l4-4a4 4 0 0 0 0-6M17 9l1-1a4 4 0 0 0-6-6L8 6a4 4 0 0 0 0 6" transform="translate(0 0) scale(.92)"/>',
  settings:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--surface)"/><circle cx="15" cy="12" r="2" fill="var(--surface)"/><circle cx="9" cy="18" r="2" fill="var(--surface)"/>',
@@ -12,7 +13,7 @@ const paths = {
  plus:'<path d="M12 5v14M5 12h14"/>', refresh:'<path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
  arrow:'<path d="m9 5 7 7-7 7"/>', up:'<path d="M12 20V4m-6 6 6-6 6 6"/>', down:'<path d="M12 4v16m-6-6 6 6 6-6"/>',
  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', speed:'<path d="M4 19a9 9 0 1 1 16 0M12 13l4-5M5 13h1M18 13h1M12 4v1"/><circle cx="12" cy="14" r="2"/>',
- lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/>', trash:'<path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/>'
+ trash:'<path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.servers}</svg>`;
 paths.tray='<path d="M12 3v11m-4-4 4 4 4-4M4 15v5h16v-5"/>';
@@ -35,28 +36,38 @@ let appUpdateChecking=false,appUpdateCheckedAt=null,pendingAppUpdate=null,appUpd
 const subscriptionRequests = new Set();
 const settingsDrafts = new Map(), settingsTimers = new Map();
 let settingsSaveQueue = Promise.resolve(), settingsSaving = 0;
-let navigationId=0, viewAnimation, pendingTab=null;
-let appearance;
+let navigationId=0, viewAnimation, pendingTab=null, renderedTab;
+const defaultTheme = 'glass';
+const appearanceThemes = [['glass','Liquid Glass'],['material','Material'],['amoled','AMOLED'],['simple','Simple']];
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let appearance, currentAccent;
 try { appearance = JSON.parse(localStorage.getItem('lunaris.appearance')) || {}; } catch { appearance = {}; }
 if (typeof appearance !== 'object' || Array.isArray(appearance)) appearance = {};
 const media = matchMedia('(prefers-color-scheme: dark)');
 function applyAppearance(){
-  const theme = ['material','amoled','glass','simple'].includes(appearance.theme) ? appearance.theme : 'material';
+  const theme = appearanceThemes.some(([id])=>id===appearance.theme) ? appearance.theme : defaultTheme;
   const scheme = theme === 'amoled' ? 'dark' : ['light','dark'].includes(appearance.scheme) ? appearance.scheme : media.matches ? 'dark' : 'light';
-  const accent = /^#[0-9a-f]{6}$/i.test(appearance.accent) ? appearance.accent : scheme === 'dark' ? '#399d83' : '#167663';
+  const glass = theme === 'glass';
+  const defaultAccent = scheme === 'dark' ? (glass ? '#aa9aff' : '#399d83') : (glass ? '#5941b2' : '#167663');
+  const accent = /^#[0-9a-f]{6}$/i.test(appearance.accent) ? appearance.accent : defaultAccent;
+  currentAccent = accent;
   appearance.background = Background.modes.some(([id])=>id===appearance.background) ? appearance.background : 'waves';
   appearance.backgroundIntensity = Number.isFinite(appearance.backgroundIntensity) ? Math.max(10,Math.min(100,appearance.backgroundIntensity)) : 60;
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.scheme = scheme;
   document.documentElement.dataset.background = appearance.background;
   document.documentElement.style.setProperty('--accent',accent);
+  const accentInput = $('#accent-color');
+  if(accentInput&&accentInput.value!==accent)accentInput.value=accent;
   Background.set({mode:appearance.background,intensity:appearance.backgroundIntensity/100,accent,dark:scheme==='dark'});
   const slider = $('#background-intensity'), output = $('#background-intensity-value');
   if(slider)slider.disabled=appearance.background==='none';
   if(output)output.textContent=`${appearance.backgroundIntensity}%`;
   try { localStorage.setItem('lunaris.appearance',JSON.stringify(appearance)); } catch { /* WebView storage may be disabled. */ }
 }
-applyAppearance(); media.addEventListener('change',applyAppearance);
+applyAppearance();
+reduceMotion.addEventListener('change',()=>{if(reduceMotion.matches)viewAnimation?.cancel();});
+media.addEventListener('change',applyAppearance);
 const native = () => window.__TAURI__?.core?.invoke;
 async function rpc(method,args={}){
   if(!native()) throw Error('Откройте установленное приложение Lunaris client. В браузере доступен только просмотр интерфейса.');
@@ -118,10 +129,23 @@ function serverRows(profiles){
 function home(){
  const p=state.profiles.find(p=>p.key===state.selected), android=state.platform==='android';
  const profiles=homeProfiles(),subscription=state.subscriptions.find(s=>s.id===p?.source_id);
- return `<section class="card connect-card"><div class="card-topline"><span class="private-label">${icon('lock')}Защищённое подключение</span><span>${esc(state.settings.core)}${android?' · VPN':''}</span></div><form id="settings-form" class="connection-settings"><div class="field-grid">${android?'':select('Способ подключения','mode',connectionModes)}${select('Способ проверки задержки','latency_method',latencyMethods)}</div>${android?'':'<p class="helper">Способ подключения применится при следующем сеансе. TUN требует прав администратора.</p>'}</form><div class="orb-wrap"><button type="button" class="connect-orb ${state.status}" data-action="toggle" aria-label="Подключить VPN" ${!p?'disabled':''}>${icon('shield')}</button></div><h2 class="connection-status" id="connection-status" role="status" aria-live="polite"></h2><div class="connection-latency"><button type="button" class="text-button" id="measure-selected" data-action="measure-selected">${icon('speed')}Проверить задержку</button><span class="connection-latency-result" role="status" aria-live="polite" aria-atomic="true"><strong id="stat-latency">—</strong><span id="latency-method"></span></span></div><div class="selected-server"><span class="server-avatar">${icon('servers')}</span><div class="server-meta"><div class="server-name">${p?nameHtml(p.name):'Сервер не выбран'}</div><div class="caption">${p?esc(p.protocol.toUpperCase()):'Начните с добавления подписки'}</div></div><button class="text-button" data-tab="servers">Изменить →</button></div></section>
- ${homeSubscriptionDescription()}<div class="subscription-notices" role="status" aria-live="polite">${subscriptionNotices()}</div>
+ return `<section class="card connect-card">
+   <div class="connection-overview">
+     <div>
+       <h2 class="connection-status" id="connection-status" role="status" aria-live="polite"></h2>
+       <div class="connection-latency"><button type="button" class="text-button" id="measure-selected" data-action="measure-selected">${icon('speed')}Проверить задержку</button><span class="connection-latency-result" role="status" aria-live="polite" aria-atomic="true"><strong id="stat-latency">—</strong><span id="latency-method"></span></span></div>
+     </div>
+     <div class="orb-wrap">
+       <button type="button" class="connect-orb ${state.status}" data-action="toggle" aria-label="Подключить VPN" ${!p?'disabled':''}>${icon('power')}<span id="orb-label" class="orb-label" aria-hidden="true">Подключить VPN</span></button>
+     </div>
+   </div>
+   <div class="selected-server"><span class="server-avatar">${icon('servers')}</span><div class="server-meta"><div class="server-name">${p?nameHtml(p.name):'Сервер не выбран'}</div><div class="caption">${p?esc(p.protocol.toUpperCase()):'Начните с добавления подписки'}</div></div><button class="text-button" data-tab="servers">Изменить ${icon('arrow')}</button></div>
+ </section>
+ <div id="connection-error"></div>
  <div class="stats"><div class="card stat"><span class="stat-label">${icon('up')}Отправлено</span><strong id="stat-up">0 Б</strong></div><div class="card stat"><span class="stat-label">${icon('down')}Получено</span><strong id="stat-down">0 Б</strong></div><div class="card stat"><span class="stat-label">${icon('clock')}Время сессии</span><strong id="stat-time">00:00:00</strong></div></div>
- <div id="connection-error"></div><div class="section-heading"><div><h2>Серверы<span class="count">${profiles.length}</span></h2>${p?`<p class="caption home-server-source">${esc(subscription?.name||'Добавлены вручную')}</p>`:''}</div><div class="actions server-actions">${bulkLatencySelect()}${btn(state.measuring?'Остановить':'Проверить','measure','speed')}${btn('Добавить','import','plus')}</div></div>${autoSortControl()}<div id="measure-progress" class="measure-progress"></div><div class="server-list" id="server-list">${serverRows(profiles)}</div>`;
+ <form id="settings-form" class="card connection-settings"><div class="field-grid">${android?'':select('Способ подключения','mode',connectionModes)}${select('Способ проверки задержки','latency_method',latencyMethods)}</div>${android?'':'<p class="helper">Способ подключения применится при следующем сеансе. TUN требует прав администратора.</p>'}</form>
+ ${homeSubscriptionDescription()}<div class="subscription-notices" role="status" aria-live="polite">${subscriptionNotices()}</div>
+ <div class="section-heading"><div><h2>Серверы<span class="count">${profiles.length}</span></h2>${p?`<p class="caption home-server-source">${esc(subscription?.name||'Добавлены вручную')}</p>`:''}</div><div class="actions server-actions">${bulkLatencySelect()}${btn(state.measuring?'Остановить':'Проверить','measure','speed')}${btn('Добавить','import','plus')}</div></div>${autoSortControl()}<div id="measure-progress" class="measure-progress"></div><div class="server-list" id="server-list">${serverRows(profiles)}</div>`;
 }
 function servers(){return `<div class="section-heading"><h2>Все серверы<span class="count">${state.profiles.length}</span></h2>${btn('Импорт','import','plus',true)}</div><div class="toolbar"><input id="search" type="search" placeholder="Поиск по названию и протоколу" aria-label="Поиск серверов" value="${esc(search)}"><select id="source-filter" aria-label="Источник"><option value="all">Все источники</option><option value="manual">Вручную</option>${state.subscriptions.map(s=>`<option value="${esc(s.id)}" ${source===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select>${bulkLatencySelect()}${btn(state.measuring?'Остановить':'Проверить все','measure','speed')}</div>${autoSortControl()}<div id="measure-progress" class="measure-progress"></div><div class="server-list" id="server-list">${serverRows(visibleProfiles())}</div>`;}
 function subscriptions(){
@@ -165,8 +189,9 @@ function routingSettings(){
 }
 function settings(){
  const a=state.platform==='android';
+ const cores=[['sing-box','sing-box / Xray'],['mihomo','Mihomo'],...(!a?[['xray','Xray']]:[])];
  return `<form id="settings-form">
- ${section('Подключение','shield',`<div class="field-grid">${!a?select('Режим','mode',connectionModes):''}${select('Ядро','core',[['sing-box','sing-box / Xray'],['mihomo','Mihomo']])}${!a?input('Порт прокси','mixed_port','number')+input('Порт управления','api_port','number'):''}</div>${check('IPv6','ipv6')}${check('Проверять HTTPS при подключении','verify_connection','Подтверждает доступ к интернету перед статусом «Подключено».')}${select('Способ проверки задержки','latency_method',latencyMethods)}${input('Адрес проверки HTTPS','probe_url','url')}${!a?input('Путь к sing-box (необязательно)','core_path')+input('Путь к Mihomo (необязательно)','mihomo_path')+'<p class="helper">Режим TUN требует запуска приложения от имени администратора.</p>':''}`)}
+ ${section('Подключение','shield',`<div class="field-grid">${!a?select('Режим','mode',connectionModes):''}${select('Ядро','core',cores)}${!a?input('Порт прокси','mixed_port','number')+input('Порт управления','api_port','number'):''}</div>${check('IPv6','ipv6')}${check('Проверять HTTPS при подключении','verify_connection','Подтверждает доступ к интернету перед статусом «Подключено».')}${select('Способ проверки задержки','latency_method',latencyMethods)}${input('Адрес проверки HTTPS','probe_url','url')}${!a?input('Путь к sing-box (необязательно)','core_path')+input('Путь к Mihomo (необязательно)','mihomo_path')+'<p class="helper">Режим TUN требует запуска приложения от имени администратора.</p>':''}`)}
  ${section('Маршрутизация','routing',routingSettings())}
  ${section('Серверы','servers',check('Автосортировка по пингу','auto_sort_ping','Меньший пинг выше; недоступные и непроверенные серверы в конце.'))}
  ${!a?section('Окно и трей','settings',`${check('Сворачивать в трей','minimize_to_tray','При нажатии кнопки сворачивания окно скрывается в трей.')}${check('Оставлять в трее при закрытии окна','close_to_tray','VPN продолжает работать. Для завершения выберите «Выход» в меню трея.')}<p class="helper">Нажмите значок в трее, чтобы открыть приложение; правая кнопка открывает меню управления.</p>`):''}
@@ -179,7 +204,16 @@ function settings(){
 }
 function logs(){return `<div class="section-heading"><h2>Журнал подключения</h2></div><p class="muted" style="margin-bottom:16px">Последние 300 записей. Ссылки, пароли и ключи скрыты. Журнал хранится в памяти.</p><div class="card log" id="log-lines">${esc(state.logs.join('\n') || 'Записей пока нет.')}</div>`;}
 function render(){
- $('#desktop-nav').innerHTML=navHtml();$('#mobile-nav').innerHTML=navHtml();$('#page-title').textContent=nav.find(n=>n[0]===tab)?.[1]||'Подключение';
+ if(renderedTab!==tab){
+  const index=nav.findIndex(([id])=>id===tab),html=navHtml();
+  for(const menu of [$('#desktop-nav'),$('#mobile-nav')]){
+   menu.innerHTML=html;
+   menu.style.setProperty('--nav-index',index);
+   menu.style.setProperty('--nav-count',nav.length);
+  }
+  $('#page-title').textContent=nav[index][1];
+  renderedTab=tab;
+ }
  if(!state)return;
  $('#view').innerHTML=({home,servers,subscriptions,settings,logs}[tab]||home)();
  if($('#source-filter'))$('#source-filter').value=source;if($('#bulk-method'))$('#bulk-method').value=bulkMethod;
@@ -197,12 +231,19 @@ function updateStatus(){
  const trayButton=$('[data-action="tray"]');if(trayButton){trayButton.hidden=state.platform!=='windows';trayButton.innerHTML=icon('tray');}
  $('#status-pill').textContent=statusNames[s]||s;$('#status-pill').className='status-pill '+s;
  if(tab==='home'){
-  $('#connection-status').textContent=statusNames[s]||s;
+  const connectionStatus=$('#connection-status'),label=statusNames[s]||s;
+  if(connectionStatus.textContent!==label)connectionStatus.textContent=label;
   const connected=s==='connected',result=connected?state.latency[state.selected]:null;
   const measureButton=$('#measure-selected');measureButton.disabled=!connected||!state.selected||state.measuring||busy;
   measureButton.title=connected?'Измерить задержку подключённого сервера':'Подключите VPN, чтобы проверить задержку';
-  const orb=$('.connect-orb');orb.className='connect-orb '+s;orb.disabled=!state.selected||s==='disconnecting'||busy;
-  orb.setAttribute('aria-label',s==='connecting'?'Отменить подключение VPN':running?'Отключить VPN':'Подключить VPN');
+  const orb=$('.connect-orb'),orbClass='connect-orb '+s;
+  if(orb.className!==orbClass)orb.className=orbClass;
+  orb.disabled=!state.selected||s==='disconnecting'||busy;
+  const orbLabel=s==='connecting'?'Отменить подключение VPN':running?'Отключить VPN':'Подключить VPN';
+  orb.setAttribute('aria-label',orbLabel);
+  const orbCaption=$('#orb-label');
+  const caption=s==='connecting'?'Отменить':s==='disconnecting'?'Отключается…':orbLabel;
+  if(orbCaption&&orbCaption.textContent!==caption)orbCaption.textContent=caption;
   orb.setAttribute('aria-pressed',String(running));
   $('#stat-up').textContent=bytes(state.stats.upload);$('#stat-down').textContent=bytes(state.stats.download);$('#stat-time').textContent=duration(state.stats.duration);
   $('#latency-method').textContent={tcp:'TCP/UDP',icmp:'ICMP',proxy:'GET'}[state.settings.latency_method];
@@ -302,7 +343,18 @@ async function checkAppUpdate(manual=false){
 }
 function importDialog(){openDialog('Добавить сервер',`<div class="dialog-tabs">${btn('Подписка','subscription','link')}${btn('Вставить серверы','manual','servers',true)}</div><label class="field">Ссылки или JSON<textarea name="text" required placeholder="vless://…&#10;trojan://…&#10;hysteria2://…" spellcheck="false"></textarea></label><p class="helper">Поддерживаются несколько ссылок, Base64-подписки и локальная JSON-конфигурация sing-box.</p>`,async form=>{const result=await action('import',{text:form.get('text')});toast(`Импортировано: ${result.imported}. Отклонено: ${result.rejected.length}. Дубликаты: ${result.duplicates}.`);},'Импортировать');}
 function subscriptionDialog(url=''){openDialog('Добавить подписку',`<div class="dialog-tabs">${btn('Подписка','subscription','link',true)}${btn('Вставить серверы','manual','servers')}</div><label class="field">Ссылка на подписку<input name="url" required value="${esc(url)}" placeholder="https://…" spellcheck="false" autocomplete="off"></label><label class="field">Название (необязательно)<input name="name" placeholder="Определится автоматически" maxlength="120"></label><p class="helper">Ссылка сохраняется в защищённом хранилище. При добавлении подписка будет загружена.</p>`,async form=>{await action('add_subscription',{url:form.get('url'),name:form.get('name')});toast('Подписка добавлена.');});}
-function appearanceDialog(){openDialog('Внешний вид',`<p class="field">Оформление</p><div class="theme-choices">${[['material','Material'],['amoled','AMOLED'],['glass','Liquid glass'],['simple','Simple']].map(([v,l])=>`<button type="button" class="theme-choice ${(appearance.theme||'material')===v?'active':''}" data-theme-choice="${v}">${l}</button>`).join('')}</div><p class="field" style="margin-top:24px">Акцентный цвет</p><div class="color-choices">${['#167663','#6750a4','#336eab','#b75a72','#ad6d30'].map(c=>`<button type="button" class="color-choice" style="background:${c}" data-color="${c}" aria-label="Цвет ${c}"></button>`).join('')}<input type="color" id="accent-color" value="${appearance.accent||'#167663'}" aria-label="Свой цвет"></div><label class="field">Цветовая схема<select id="scheme"><option value="system">Как на устройстве</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label><label class="field">Анимированные обои<select id="background-mode">${Background.modes.map(([id,label])=>`<option value="${id}" ${appearance.background===id?'selected':''}>${label}</option>`).join('')}</select></label><label class="field wallpaper-intensity" for="background-intensity"><span>Яркость обоев <output id="background-intensity-value" for="background-intensity">${appearance.backgroundIntensity}%</output></span><input type="range" id="background-intensity" min="10" max="100" step="1" value="${appearance.backgroundIntensity}" ${appearance.background==='none'?'disabled':''}></label><p class="helper">Обои сохраняются автоматически. При уменьшении движения в настройках устройства фон становится статичным.</p>`,null);$('#scheme').value=appearance.scheme||'system';}
+function appearanceDialog(){
+ const theme=document.documentElement.dataset.theme;
+ openDialog('Внешний вид',`<p class="field">Оформление</p>
+ <div class="theme-choices">${appearanceThemes.map(([id,label])=>`<button type="button" class="theme-choice" data-theme-choice="${id}" aria-pressed="${theme===id}">${label}</button>`).join('')}</div>
+ <p class="field appearance-colors-label">Акцентный цвет</p>
+ <div class="color-choices">${[['#6750a4','Фиолетовый'],['#167663','Зелёный'],['#336eab','Синий'],['#b75a72','Розовый'],['#ad6d30','Янтарный']].map(([color,label])=>`<button type="button" class="color-choice" style="background:${color}" data-color="${color}" aria-label="${label}"></button>`).join('')}<input type="color" id="accent-color" value="${currentAccent}" aria-label="Свой цвет"></div>
+ <label class="field">Цветовая схема<select id="scheme"><option value="system">Как на устройстве</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label>
+ <label class="field">Анимированные обои<select id="background-mode">${Background.modes.map(([id,label])=>`<option value="${id}" ${appearance.background===id?'selected':''}>${label}</option>`).join('')}</select></label>
+ <label class="field wallpaper-intensity" for="background-intensity"><span>Яркость обоев <output id="background-intensity-value" for="background-intensity">${appearance.backgroundIntensity}%</output></span><input type="range" id="background-intensity" min="10" max="100" step="1" value="${appearance.backgroundIntensity}" ${appearance.background==='none'?'disabled':''}></label>
+ <p class="helper">Обои сохраняются автоматически. При уменьшении движения в настройках устройства фон становится статичным.</p>`,null);
+ $('#scheme').value=appearance.scheme||'system';
+}
 async function navigate(next){
  if(!nav.some(([id])=>id===next)||(next===tab&&pendingTab===null))return;
  const id=++navigationId;
@@ -310,21 +362,25 @@ async function navigate(next){
  await flushSettings();
  if(id!==navigationId)return;
  const view=$('#view'),direction=nav.findIndex(n=>n[0]===next)>nav.findIndex(n=>n[0]===tab)?1:-1;
- const animate=typeof view.animate==='function'&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
+ const animate=typeof view.animate==='function'&&!reduceMotion.matches;
  if(animate){
-  viewAnimation=view.animate([{opacity:1,transform:'translateX(0)'},{opacity:0,transform:`translateX(${-direction*10}px)`}],{duration:80,easing:'ease-in',fill:'forwards'});
+  viewAnimation=view.animate([{opacity:1,transform:'none'},{opacity:0,transform:`translateX(${-direction*12}px) scale(.992)`}],{duration:105,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards'});
   await viewAnimation.finished.catch(()=>{});
   if(id!==navigationId)return;
  }
  tab=next;pendingTab=null;render();view.scrollTop=0;viewAnimation?.cancel();
  view.focus?.({preventScroll:true});
- if(animate)viewAnimation=view.animate([{opacity:0,transform:`translateX(${direction*16}px)`},{opacity:1,transform:'translateX(0)'}],{duration:180,easing:'cubic-bezier(.2,.8,.2,1)'});
+ if(animate&&!reduceMotion.matches)viewAnimation=view.animate([{opacity:0,transform:`translateX(${direction*20}px) scale(.992)`},{opacity:1,transform:'none'}],{duration:320,easing:'cubic-bezier(.18,.82,.22,1)'});
 }
 document.addEventListener('click',async e=>{
  const target=e.target.closest('button,a');if(!target)return;
  if(target.dataset.tab){await navigate(target.dataset.tab);return;}
  if(target.classList.contains('brand')){e.preventDefault();await navigate('home');return;}
- if(target.dataset.themeChoice){appearance.theme=target.dataset.themeChoice;applyAppearance();appearanceDialog();return;}
+ if(target.dataset.themeChoice){
+  appearance.theme=target.dataset.themeChoice;applyAppearance();
+  for(const choice of document.querySelectorAll('[data-theme-choice]'))choice.setAttribute('aria-pressed',String(choice===target));
+  return;
+ }
  if(target.dataset.color){appearance.accent=target.dataset.color;applyAppearance();return;}
  const a=target.dataset.action;
  if(a==='check-app-update'){await checkAppUpdate(true);return;}

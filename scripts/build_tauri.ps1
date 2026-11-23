@@ -14,10 +14,26 @@ if (-not (Test-Path app/node_modules)) {
     Push-Location app
     try { & npm.cmd ci; Check-Step 'npm ci' } finally { Pop-Location }
 }
-& $lunarisPython scripts/fetch_core.py windows
-Check-Step 'Windows cores'
-& $lunarisPython scripts/fetch_core.py android
-Check-Step 'Android cores'
+if ($Target -in @('windows','all')) {
+    & $lunarisPython scripts/fetch_core.py windows
+    Check-Step 'Windows cores'
+    & $lunarisPython scripts/fetch_core.py windows --core flclash
+    Check-Step 'FlClashCore'
+}
+if ($Target -in @('apk','all')) {
+    if (-not (Get-Command go -ErrorAction SilentlyContinue)) { throw 'Install Go 1.27 or newer for the Android FlClash core' }
+    if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
+    $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+    if (-not $env:NDK_HOME) {
+        $env:NDK_HOME = (Get-ChildItem (Join-Path $env:ANDROID_HOME 'ndk') -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
+    }
+    & $lunarisPython scripts/fetch_core.py android --core sing-box
+    Check-Step 'Android sing-box'
+    & $lunarisPython scripts/fetch_core.py android --core xray
+    Check-Step 'Android Xray'
+    & $lunarisPython scripts/build_flclash_android.py --ndk $env:NDK_HOME
+    Check-Step 'Android FlClashCore'
+}
 & $lunarisPython scripts/prepare_tauri.py
 Check-Step 'Native inputs'
 & $lunarisPython scripts/stage_tauri.py $BuildDir
@@ -35,11 +51,6 @@ try {
         Copy-Item (Join-Path $BuildDir 'build/tauri-runtime-rust/*') (Join-Path $lunarisRelease 'runtime') -Recurse -Force
     }
     if ($Target -in @('apk','all')) {
-        if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
-        $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
-        if (-not $env:NDK_HOME) {
-            $env:NDK_HOME = (Get-ChildItem (Join-Path $env:ANDROID_HOME 'ndk') -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
-        }
         & rustup target add aarch64-linux-android
         Check-Step 'Rust Android target'
         if (-not (Test-Path src-tauri/gen/android)) {

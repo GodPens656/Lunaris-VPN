@@ -34,6 +34,7 @@ fn evaluate(v: Value) -> Result<Value> {
             let port = v["port"].as_u64().unwrap_or(1080) as u16;
             match kind {
                 "xray" => config::xray(&p, port, password, &s, hosts),
+                "xray-desktop" => config::xray_desktop(&p, &s, hosts, None),
                 "mihomo" => config::mihomo(&p, &s, secret, hosts),
                 "mihomo-proxy" => config::mihomo_proxy(&p),
                 "android" => config::android(&p, &s, secret, password),

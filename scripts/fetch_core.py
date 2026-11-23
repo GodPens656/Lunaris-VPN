@@ -4,6 +4,7 @@ import hashlib
 import gzip
 import json
 from pathlib import Path
+import tempfile
 import urllib.request
 import zipfile
 
@@ -26,6 +27,12 @@ WINDOWS_FILES = {
 }
 XRAY_VERSION = "26.11.9"
 MIHOMO_VERSION = "1.19.34"
+FLCLASH_VERSION = "0.9.4"
+FLCLASH_WINDOWS_ARCHIVE = f"FlClash-{FLCLASH_VERSION}-windows-amd64-portable.zip"
+FLCLASH_WINDOWS_SHA256 = "8fab8ab4edead33a6c6d4f249fd90a287acbf66a99cc5bd207fcfc034f3b1224"
+FLCLASH_CORE_SHA256 = "866ee89af2ea5c47f228dc3f2f5b876439270d2997928b9b5cfcb560d109b36f"
+WINTUN_SHA256 = "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce"
+WINTUN_LICENSE_SHA256 = "183adac21e7d96c508c8fd34d394b7b6708bc81564ad1bad61ab66143a008cd2"
 MIHOMO_ASSET = {
     "url": f"https://github.com/MetaCubeX/mihomo/releases/download/v{MIHOMO_VERSION}/mihomo-windows-amd64-compatible-v{MIHOMO_VERSION}.zip",
     "sha256": "cd6738d4648cc1a5f48049a1343b697ab510889d648f045c5c780fc1ab443a79",
@@ -56,6 +63,57 @@ def cached_files(target, expected):
             if hashlib.file_digest(source, "sha256").hexdigest() != checksum:
                 return False
     return True
+
+
+def download_verified(url, target, checksum):
+    request = urllib.request.Request(url, headers={"User-Agent": "LunarisVPN-build/0.1"})
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+        temporary = Path(output.name)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as source:
+                digest = hashlib.sha256()
+                total = 0
+                while chunk := source.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > 200 * 1024 * 1024:
+                        raise RuntimeError("Release asset exceeds the 200 MiB limit")
+                    digest.update(chunk)
+                    output.write(chunk)
+            if digest.hexdigest() != checksum:
+                raise RuntimeError(f"SHA-256 mismatch for {target.name}")
+            output.close()
+            temporary.replace(target)
+        finally:
+            output.close()
+            temporary.unlink(missing_ok=True)
+
+
+def install_flclash_windows():
+    destination = ROOT / "assets/core"
+    if cached_files(destination, {"FlClashCore.exe": FLCLASH_CORE_SHA256}):
+        print(f"Cached FlClashCore {FLCLASH_VERSION} for Windows, SHA-256 verified")
+        return
+    cache = ROOT / "build/core-downloads"
+    artifact = cache / FLCLASH_WINDOWS_ARCHIVE
+    if not cached_files(cache, {artifact.name: FLCLASH_WINDOWS_SHA256}):
+        url = f"https://github.com/chen08209/FlClash/releases/download/v{FLCLASH_VERSION}/{artifact.name}"
+        download_verified(url, artifact, FLCLASH_WINDOWS_SHA256)
+    destination.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(artifact) as archive:
+        member, = [name for name in archive.namelist() if Path(name).name == "FlClashCore.exe"]
+        manifest_path = str(Path(member).with_name("manifest.json").as_posix())
+        manifest = json.loads(archive.read(manifest_path))
+        binary = archive.read(member)
+        if hashlib.sha256(binary).hexdigest() != FLCLASH_CORE_SHA256 or manifest["coreSha256"] != FLCLASH_CORE_SHA256:
+            raise RuntimeError("FlClashCore executable does not match the release manifest")
+        temporary = destination / "FlClashCore.exe.download"
+        try:
+            temporary.write_bytes(binary)
+            temporary.replace(destination / "FlClashCore.exe")
+        finally:
+            temporary.unlink(missing_ok=True)
+    print(f"Installed FlClashCore {FLCLASH_VERSION} for Windows, SHA-256 verified")
 
 
 def install(platform: str):
@@ -104,33 +162,35 @@ def install_xray(platform: str):
         target = ROOT / "assets/core" if platform == "windows" else ROOT / "extensions/sever_vpn/src/flutter/sever_vpn/android/src/main/jniLibs" / abi
         target.mkdir(parents=True, exist_ok=True)
         binary = "xray.exe" if platform == "windows" else "libxray.so"
-        if cached_files(target, {binary: binary_checksum}) and (ROOT / "assets/licenses/xray-LICENSE").is_file():
+        notices = ROOT / "assets/licenses"
+        files = {binary: binary_checksum}
+        if platform == "windows":
+            files["wintun.dll"] = WINTUN_SHA256
+        if (cached_files(target, files) and (notices / "xray-LICENSE").is_file()
+                and (platform != "windows" or cached_files(notices, {"wintun-LICENSE": WINTUN_LICENSE_SHA256}))):
             print(f"Cached Xray {XRAY_VERSION} for {platform} {abi}, SHA-256 verified")
             continue
-        request = urllib.request.Request(f"https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{name}",
-                                         headers={"User-Agent": "LunarisVPN-build/0.1"})
-        path = target / "xray-download.zip"
-        digest = hashlib.sha256()
-        with urllib.request.urlopen(request, timeout=60) as source, path.open("wb") as output:
-            total = 0
-            while data := source.read(1024 * 1024):
-                total += len(data)
-                if total > 200 * 1024 * 1024:
-                    raise RuntimeError("Xray archive exceeds the 200 MiB limit")
-                digest.update(data)
-                output.write(data)
-        if digest.hexdigest() != checksum:
-            path.unlink()
-            raise RuntimeError("Xray release SHA-256 mismatch; nothing was installed")
+        cache = ROOT / "build/core-downloads"
+        path = cache / name
+        if not cached_files(cache, {name: checksum}):
+            url = f"https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{name}"
+            download_verified(url, path, checksum)
         with zipfile.ZipFile(path) as archive:
             data = archive.read(member)
             if hashlib.sha256(data).hexdigest() != binary_checksum:
                 raise RuntimeError("Xray binary SHA-256 mismatch")
+            if platform == "windows":
+                wintun = archive.read("wintun.dll")
+                license_data = archive.read("LICENSE-Wintun")
+                if (hashlib.sha256(wintun).hexdigest() != WINTUN_SHA256
+                        or hashlib.sha256(license_data).hexdigest() != WINTUN_LICENSE_SHA256):
+                    raise RuntimeError("Wintun binary or license SHA-256 mismatch")
+                notices.mkdir(parents=True, exist_ok=True)
+                (target / "wintun.dll").write_bytes(wintun)
+                (notices / "wintun-LICENSE").write_bytes(license_data)
             (target / binary).write_bytes(data)
-            notices = ROOT / "assets/licenses"
             notices.mkdir(parents=True, exist_ok=True)
             (notices / "xray-LICENSE").write_bytes(archive.read("LICENSE"))
-        path.unlink()
         print(f"Installed Xray {XRAY_VERSION} for {platform} {abi}, SHA-256 verified")
 
 
@@ -224,7 +284,7 @@ def install_mihomo():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("platform", choices=list(ASSETS))
-    parser.add_argument("--core", choices=["all", "sing-box", "xray", "mihomo"], default="all")
+    parser.add_argument("--core", choices=["all", "sing-box", "xray", "mihomo", "flclash"], default="all")
     args = parser.parse_args()
     if args.core in {"all", "sing-box"}:
         install(args.platform)
@@ -232,3 +292,7 @@ if __name__ == "__main__":
         install_xray(args.platform)
     if args.core in {"all", "mihomo"}:
         install_mihomo() if args.platform == "windows" else install_mihomo_android()
+    if args.core == "flclash":
+        if args.platform != "windows":
+            parser.error("FlClashCore executable is a Windows build input")
+        install_flclash_windows()

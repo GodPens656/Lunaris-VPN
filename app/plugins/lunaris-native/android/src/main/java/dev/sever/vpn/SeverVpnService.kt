@@ -28,15 +28,13 @@ import java.util.concurrent.TimeUnit
 import java.util.Collections
 
 /** Independent :vpn process: TUN, network changes, health checks and traffic counters. */
-class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
+open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val serial = Mutex()
     private var command: CommandServer? = null
     private var xray: java.lang.Process? = null
     private var xrayLogs: Job? = null
-    private var mihomo: java.lang.Process? = null
-    private var mihomoLogs: Job? = null
-    private var mihomoDiagnostics: CoreDiagnostics? = null
+    @Volatile private var mihomoActive = false
     private var tun: ParcelFileDescriptor? = null
     private var network: Network? = null
     private var interfaceListener: InterfaceUpdateListener? = null
@@ -92,6 +90,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onCreate() {
         super.onCreate()
+        if (this is MihomoVpnService) File(filesDir, "mihomo-core/config.yaml").delete()
         connectivity = getSystemService(ConnectivityManager::class.java)
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel("sever-vpn", "Lunaris client", NotificationManager.IMPORTANCE_LOW))
@@ -114,7 +113,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         if (intent?.action == "STOP") { requestStop(); return START_NOT_STICKY }
         if (intent?.action != "CONNECT") { stopSelf(); return START_NOT_STICKY }
-        if (initializing || command != null || state == "disconnecting") return START_NOT_STICKY
+        if (initializing || hasCore() || state == "disconnecting") return START_NOT_STICKY
         initializing = true
         stopping = false
         notifications.start()
@@ -137,56 +136,32 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         startup = scope.launch {
             serial.withLock {
                 ensureActive()
-                if (command != null) { return@withLock }
+                if (hasCore()) { return@withLock }
                 var startupStep = "Не удалось подготовить конфигурацию Android VPN."
                 try {
                     if (prepare(this@SeverVpnService) != null)
                         throw ProbeFailure("Android не предоставил разрешение VPN. Разрешите подключение и повторите запуск.")
                     val doc = JSONObject(config)
-                    val xrayConfig = doc.optJSONObject("sever_xray")
                     val mihomoConfig = doc.optJSONObject("sever_mihomo")
-                    doc.remove("sever_xray")
-                    doc.remove("sever_mihomo")
-                    if (xrayConfig != null && mihomoConfig != null) throw IllegalStateException()
-                    if (xrayConfig != null) {
-                        startupStep = "Не удалось запустить Xray на Android."
-                        val sidecarPort = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
-                        xrayConfig.getJSONArray("inbounds").getJSONObject(0).put("port", sidecarPort)
-                        doc.getJSONArray("outbounds").getJSONObject(0).put("server_port", sidecarPort)
-                        startXray(xrayConfig.toString(), sidecarPort)
-                    }
-                    if (mihomoConfig != null) {
-                        startupStep = "Не удалось запустить Clash (Mihomo) на Android."
-                        val sidecarPort = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
-                        mihomoConfig.put("mixed-port", sidecarPort)
-                        doc.getJSONArray("outbounds").getJSONObject(0).put("server_port", sidecarPort)
-                        startMihomo(MihomoConfigEncoding.toYamlJson(mihomoConfig.toString()), sidecarPort)
-                    }
-                    val nativeConfig = doc.toString()
-                    val api = doc.getJSONObject("experimental").getJSONObject("clash_api")
-                    apiPort = api.getString("external_controller").substringAfterLast(':').toInt()
-                    apiSecret = api.getString("secret")
+                    check((this@SeverVpnService is MihomoVpnService) == (mihomoConfig != null))
                     probeUrl = probe
                     verifyConnection = intent.getBooleanExtra("verify_connection", true)
-                    startupStep = "Не удалось инициализировать нативный мост Android VPN."
-                    Seq.setContext(applicationContext)
-                    val base = File(filesDir, "native-core").apply { mkdirs() }
-                    Libbox.setup(SetupOptions().apply {
-                        basePath = base.absolutePath
-                        workingPath = base.absolutePath
-                        tempPath = cacheDir.absolutePath
-                        fixAndroidStack = true
-                        logMaxLines = 0 // Do not retain unredacted native core logs.
-                        debug = false
-                    })
-                    if (Libbox.version() != "1.14.4") throw IllegalStateException()
-                    Libbox.checkConfig(nativeConfig)
-                    startupStep = "Не удалось создать Android VPN-туннель. Проверьте разрешение VPN."
-                    registerNetwork()
-                    val server = CommandServer(this@SeverVpnService, this@SeverVpnService)
-                    command = server
-                    server.start()
-                    server.startOrReloadService(nativeConfig, OverrideOptions())
+                    if (mihomoConfig != null) {
+                        startupStep = "Не удалось создать VPN-туннель FlClashCore."
+                        startMihomo(mihomoConfig)
+                    } else {
+                        val xrayConfig = doc.optJSONObject("sever_xray")
+                        doc.remove("sever_xray")
+                        if (xrayConfig != null) {
+                            startupStep = "Не удалось запустить Xray на Android."
+                            val port = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
+                            xrayConfig.getJSONArray("inbounds").getJSONObject(0).put("port", port)
+                            doc.getJSONArray("outbounds").getJSONObject(0).put("server_port", port)
+                            startXray(xrayConfig.toString(), port)
+                        }
+                        startupStep = "Не удалось создать Android VPN-туннель sing-box. Проверьте разрешение VPN."
+                        startSingBox(doc)
+                    }
                     ensureActive()
                     if (tun == null) throw IllegalStateException()
                     probeConnection()
@@ -202,15 +177,15 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         while (isActive) {
                             delay(1000)
                             if (xray?.isAlive == false) { fail("Xray exited; VPN was stopped"); break }
-                            if (mihomo?.isAlive == false) {
-                                finishMihomoLogs()
-                                fail(mihomoFailure("Ядро Clash (Mihomo) завершилось; VPN остановлен."))
-                                break
-                            }
                             try {
-                                val counters = api("/connections")
-                                upload = counters.getLong("uploadTotal")
-                                download = counters.getLong("downloadTotal")
+                                if (mihomoActive) {
+                                    val (up, down) = MihomoNative.traffic()
+                                    upload = up; download = down
+                                } else {
+                                    val counters = api("/connections")
+                                    upload = counters.getLong("uploadTotal")
+                                    download = counters.getLong("downloadTotal")
+                                }
                                 failures = 0
                                 broadcast()
                             } catch (_: Exception) {
@@ -220,7 +195,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                             if (state == "connecting" && network != null) {
                                 runCatching {
                                     probeConnection()
-                                    if (network != null && command != null) {
+                                    if (network != null && hasCore()) {
                                         state = "connected"; foreground("Подключено"); broadcast()
                                     }
                                 }
@@ -232,6 +207,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     throw cancelled
                 } catch (failure: ProbeFailure) { if (!stopping) failLocked(failure.safeMessage) }
                 catch (_: Exception) { if (!stopping) failLocked(startupStep) }
+                catch (_: LinkageError) { if (!stopping) failLocked(startupStep) }
             }
         }
         return START_NOT_STICKY // No plaintext config is persisted for automatic restart.
@@ -241,9 +217,9 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val text = if (serverName.isBlank()) label else "$label: $serverName"
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val open = launch?.let { PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
-        val stop = PendingIntent.getService(this, 1, Intent(this, SeverVpnService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val restore = PendingIntent.getService(this, 2,
-            Intent(this, SeverVpnService::class.java).setAction(RESTORE_NOTIFICATION),
+            Intent(this, javaClass).setAction(RESTORE_NOTIFICATION),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notice = android.app.Notification.Builder(this, "sever-vpn")
             .setSmallIcon(android.R.drawable.ic_lock_lock).setContentTitle("Lunaris client").setContentText(text)
@@ -299,12 +275,13 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 throw ProbeFailure("DNS через VPN не вернул адрес сайта проверки.")
             }
         }
-        val check = try {
-            api("/proxies/proxy/delay?timeout=10000&url=" + URLEncoder.encode(probeUrl, "UTF-8"))
+        val passed = try {
+            if (mihomoActive) MihomoNative.checkProxy(probeUrl)
+            else api("/proxies/proxy/delay?timeout=10000&url=" + URLEncoder.encode(probeUrl, "UTF-8")).has("delay")
         } catch (_: Exception) {
             throw ProbeFailure("HTTPS через VPN недоступен. Проверьте сервер и адрес проверки соединения.")
         }
-        if (!check.has("delay")) throw ProbeFailure("HTTPS-проверка VPN не завершилась.")
+        if (!passed) throw ProbeFailure("HTTPS-проверка VPN не завершилась.")
     }
 
     private suspend fun startXray(config: String, port: Int) {
@@ -335,113 +312,62 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         throw IllegalStateException()
     }
 
-    private suspend fun startMihomo(config: String, port: Int) {
-        val executable = File(applicationInfo.nativeLibraryDir, "libmihomo.so")
-        if (!executable.canExecute())
-            throw ProbeFailure("Ядро Clash (Mihomo) отсутствует или недоступно для этого устройства. Переустановите APK для своей архитектуры.")
-        val version = ProcessBuilder(executable.absolutePath, "-v").redirectErrorStream(true).start()
-        if (!version.waitFor(10, TimeUnit.SECONDS)) {
-            version.destroyForcibly()
-            throw ProbeFailure("Ядро Clash (Mihomo) не ответило на проверку версии.")
-        }
-        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Mihomo Meta v1.19.34 "))
-            throw ProbeFailure("Версия ядра Clash (Mihomo) не соответствует приложению. Переустановите APK.")
-        val base = File(filesDir, "mihomo-core")
-        if (!base.isDirectory && !base.mkdirs())
-            throw ProbeFailure("Не удалось создать рабочую папку Clash (Mihomo). Проверьте свободное место на телефоне.")
-        val sensitive = mutableSetOf<String>()
-        fun collect(value: Any?, key: String = "") {
-            when (value) {
-                is JSONObject -> value.keys().forEach { field -> collect(value.opt(field), field) }
-                is org.json.JSONArray -> (0 until value.length()).forEach { collect(value.opt(it), key) }
-                is String -> {
-                    if (key in setOf("uuid", "password", "public-key", "short-id", "obfs-password", "secret",
-                            "encryption", "server", "servername", "sni", "path", "grpc-service-name", "config") && value.isNotEmpty()) {
-                        sensitive.add(value)
-                    }
-                    if (key == "authentication") {
-                        sensitive.add(value)
-                        sensitive.add(value.substringAfter(':', ""))
-                    }
-                }
-            }
-        }
-        collect(JSONObject(config))
-        // Validate with the device's own binary before creating the SOCKS bridge.
-        // Windows configuration tests cannot reveal Android-specific parser failures.
-        val check = launchMihomo(executable, base, config, sensitive, check = true)
-        var checked = false
-        for (attempt in 0 until 300) {
-            if (!check.isAlive) { checked = true; break }
-            delay(50)
-        }
-        if (!checked) throw ProbeFailure(mihomoFailure("Проверка конфигурации Clash (Mihomo) не завершилась за 15 секунд."))
-        finishMihomoLogs()
-        if (check.exitValue() != 0)
-            throw ProbeFailure(mihomoFailure("Clash (Mihomo) отклонил конфигурацию."))
-        mihomo = null
-        mihomoLogs = null
+    private fun hasCore() = command != null || mihomoActive
 
-        // Read config from stdin, keeping credentials off disk and command-line arguments.
-        // A separate process keeps Mihomo's Go runtime isolated from libbox's runtime.
-        // Mihomo supports -f - explicitly. Reopening stdin through /proc can
-        // be denied by Android's SELinux policy even when inherited fd 0 works.
-        val process = launchMihomo(executable, base, config, sensitive, check = false)
-        // Cold initialization can take longer than four seconds on a phone.
-        repeat(300) {
-            if (!process.isAlive) {
-                finishMihomoLogs()
-                throw ProbeFailure(mihomoFailure("Ядро Clash (Mihomo) завершилось при запуске."))
-            }
-            if (runCatching { Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 100) }; true }.getOrDefault(false)) return
-            delay(50)
-        }
-        throw ProbeFailure(mihomoFailure("Ядро Clash (Mihomo) не открыло локальный прокси за 15 секунд."))
+    private fun startSingBox(doc: JSONObject) {
+        val nativeConfig = doc.toString()
+        val api = doc.getJSONObject("experimental").getJSONObject("clash_api")
+        apiPort = api.getString("external_controller").substringAfterLast(':').toInt()
+        apiSecret = api.getString("secret")
+        Seq.setContext(applicationContext)
+        val base = File(filesDir, "native-core").apply { mkdirs() }
+        Libbox.setup(SetupOptions().apply {
+            basePath = base.absolutePath
+            workingPath = base.absolutePath
+            tempPath = cacheDir.absolutePath
+            fixAndroidStack = true
+            logMaxLines = 0
+            debug = false
+        })
+        check(Libbox.version() == "1.14.4")
+        Libbox.checkConfig(nativeConfig)
+        registerNetwork()
+        val server = CommandServer(this, this)
+        command = server
+        server.start()
+        server.startOrReloadService(nativeConfig, OverrideOptions())
     }
 
-    private suspend fun launchMihomo(executable: File, base: File, config: String,
-                                     sensitive: Set<String>, check: Boolean): java.lang.Process {
-        val diagnostics = CoreDiagnostics(sensitive)
-        mihomoDiagnostics = diagnostics
-        val args = mutableListOf(executable.absolutePath, "-d", base.absolutePath, "-f", "-")
-        if (check) args.add("-t")
-        val builder = ProcessBuilder(args).directory(base).redirectErrorStream(true)
-        // CLASH_CONFIG_STRING takes precedence over -f - in Mihomo's main().
-        // Only our validated in-memory configuration may control this process.
-        builder.environment().keys.removeAll { it.startsWith("CLASH_") }
-        val process = try { builder.start() } catch (failure: java.io.IOException) {
-            diagnostics.add(failure.message.orEmpty())
-            throw ProbeFailure(mihomoFailure("Не удалось создать процесс Clash (Mihomo)."))
+    private fun startMihomo(config: JSONObject) {
+        apiPort = config.getString("external-controller").substringAfterLast(':').toInt()
+        apiSecret = config.getString("secret")
+        val home = File(filesDir, "mihomo-core")
+        mihomoActive = true
+        MihomoNative.configure(home, config, probeUrl)
+        registerNetwork()
+        val dns = "172.19.0.2"
+        val addresses = mutableListOf("172.19.0.1/30")
+        val builder = Builder().setSession("Lunaris client").setMtu(1500)
+            .addAddress("172.19.0.1", 30).addDnsServer(dns)
+            .addRoute("0.0.0.0", 0).addRoute("::", 0)
+            .setUnderlyingNetworks(network?.let { arrayOf(it) })
+        if (config.optBoolean("ipv6")) {
+            builder.addAddress("fdfe:dcba:9876::1", 126)
+            addresses += "fdfe:dcba:9876::1/126"
         }
-        mihomo = process // Also lets STOP/cancellation terminate the validation process.
-        mihomoLogs = scope.launch {
-            runCatching { process.inputStream.bufferedReader().use { reader ->
-                while (true) diagnostics.add(reader.readLine() ?: break)
-            } }
-        }
-        try {
-            process.outputStream.use { it.write(config.toByteArray(Charsets.UTF_8)) }
-        } catch (failure: java.io.IOException) {
-            diagnostics.add(failure.message.orEmpty())
-            finishMihomoLogs()
-            throw ProbeFailure(mihomoFailure("Не удалось передать конфигурацию Clash (Mihomo)."))
-        }
-        return process
+        if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
+        val descriptor = checkNotNull(builder.establish())
+        tun = descriptor
+        MihomoNative.attach(this, descriptor, addresses, dns)
     }
 
-    private suspend fun finishMihomoLogs() {
-        // The reader may still be delivering the final fatal line after process exit.
-        withTimeoutOrNull(1000) { mihomoLogs?.join() }
-    }
-
-    private fun mihomoFailure(message: String): String {
-        val code = mihomo?.takeIf { !it.isAlive }?.exitValue()?.let { " Код завершения: $it." }.orEmpty()
-        val detail = mihomoDiagnostics?.detail().orEmpty()
-        return message + code + if (detail.isEmpty()) "" else " Причина: $detail"
+    private fun resetCoreNetwork() {
+        if (mihomoActive) MihomoNative.resetNetwork() else command?.resetNetwork()
     }
 
     private fun snapshot(): Bundle = Bundle().apply {
         putString("status", state)
+        putBoolean("mihomo", this@SeverVpnService is MihomoVpnService)
         error?.let { putString("error", it) }
         putLong("upload", upload); putLong("download", download)
         putLong("duration", if (started > 0 && state == "connected") (SystemClock.elapsedRealtime() - started) / 1000 else 0)
@@ -492,7 +418,11 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         command = null
         runCatching { server?.closeService() }
         runCatching { server?.close() }
-        listOfNotNull(xray, mihomo).forEach { process ->
+        if (mihomoActive) {
+            mihomoActive = false
+            runCatching { MihomoNative.stop() }
+        }
+        xray?.let { process ->
             runCatching {
                 process.destroy()
                 if (!process.waitFor(3, TimeUnit.SECONDS)) {
@@ -502,10 +432,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
         xray = null
-        mihomo = null
         xrayLogs?.cancel(); xrayLogs = null
-        mihomoLogs?.cancel(); mihomoLogs = null
-        mihomoDiagnostics = null
         network = null; interfaceListener = null
         runCatching { setUnderlyingNetworks(null) }
         apiSecret = ""; started = 0
@@ -545,7 +472,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             network = next
             if (changed && state == "connected") { state = "connecting"; foreground("Проверяем новую сеть…"); broadcast() }
             updateInterface()
-            if (changed && !initializing) command?.resetNetwork()
+            if (changed && !initializing) resetCoreNetwork()
         }
         override fun onLinkPropertiesChanged(next: Network, properties: LinkProperties) {
             if (networkRegistered && !stopping && network == next) updateInterface()
@@ -553,7 +480,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun onLost(lost: Network) {
             if (!networkRegistered || stopping) return
             if (network == lost) {
-                network = null; setUnderlyingNetworks(null); updateInterface(); command?.resetNetwork()
+                network = null; setUnderlyingNetworks(null); updateInterface(); resetCoreNetwork()
                 if (state == "connected") { state = "connecting"; foreground("Ожидаем сеть…"); broadcast() }
             }
         }
@@ -592,7 +519,7 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val builder = Builder().setSession("Lunaris client").setMtu(options.mtu)
         // Child cores cannot call VpnService.protect themselves. Excluding
         // this app's UID keeps its physical TCP/DNS sockets outside the tunnel.
-        if (xray != null || mihomo != null) builder.addDisallowedApplication(packageName)
+        if (xray != null) builder.addDisallowedApplication(packageName)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
         val addresses4 = options.inet4Address
         var has4 = false
@@ -681,3 +608,6 @@ class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun writeDebugMessage(message: String?) { /* Secrets must never reach Logcat. */ }
     override fun connectSSHAgent() = -1
 }
+
+/** Separate Go runtime and lifecycle for the FlClash VPN core. */
+class MihomoVpnService : SeverVpnService()

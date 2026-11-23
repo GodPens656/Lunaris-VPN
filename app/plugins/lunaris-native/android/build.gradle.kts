@@ -16,7 +16,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_1_8
     }
     kotlinOptions { jvmTarget = "1.8" }
-    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += setOf("**/libxray.so", "**/libmihomo.so") } }
+    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += setOf("**/libxray.so", "**/liblunaris_mihomo.so") } }
 }
 
 rootProject.allprojects {

@@ -28,7 +28,7 @@ def patch(root):
                        'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0', root_code)
     root_gradle.write_text(root_code, encoding="utf-8")
     gradle = android / "app/build.gradle.kts"
-    content = gradle.read_text(encoding="utf-8")
+    content = gradle.read_text(encoding="utf-8").replace("**/libmihomo.so", "**/liblunaris_mihomo.so")
     if not re.search(r"// Lunaris (?:VPN|client) packaging", content):
         content += '''
 // Lunaris client packaging: preserve executable Go ELF files byte-for-byte.
@@ -37,7 +37,7 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libxray.so", "**/libmihomo.so")
+            keepDebugSymbols += setOf("**/libxray.so", "**/liblunaris_mihomo.so")
         }
     }
     buildTypes.getByName("release") {

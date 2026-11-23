@@ -152,7 +152,7 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if !matches!(self.core.as_str(), "sing-box" | "mihomo") {
+        if !matches!(self.core.as_str(), "sing-box" | "mihomo" | "xray") {
             return Err("Неизвестное ядро подключения.".into());
         }
         if !matches!(self.mode.as_str(), "proxy" | "tun") {

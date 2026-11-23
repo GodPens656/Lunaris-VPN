@@ -73,7 +73,7 @@ pub fn sing_box(
         rules.push(json!({"domain_suffix":domains,"action":"route","outbound":"direct"}));
         direct["domain_resolver"] = json!("remote");
     }
-    if p.requires_xray() && !android {
+    if local && !android {
         rules.insert(
             0,
             json!({"process_name":["xray.exe"],"action":"route","outbound":"direct"}),
@@ -93,9 +93,6 @@ pub fn xray(
     settings: &Settings,
     hosts: Option<&Value>,
 ) -> Result<Value> {
-    if !p.requires_xray() {
-        return Err("Этот профиль не требует Xray.".into());
-    }
     settings.validate()?;
     let o = &p.outbound;
     let tls = &o["tls"];
@@ -187,7 +184,10 @@ pub fn xray(
     } else if p.protocol() == "trojan" {
         json!({"servers":[{"address":o["server"],"port":o["server_port"],"password":o["password"]}]})
     } else {
-        return Err("Мост Xray поддерживает VLESS и Trojan.".into());
+        return Err(
+            "Xray поддерживает профили VLESS и Trojan. Для Hysteria2 выберите sing-box или Mihomo."
+                .into(),
+        );
     };
     let bootstrap = if settings.bootstrap_dns.contains(':') {
         format!("[{}]", settings.bootstrap_dns)
@@ -202,6 +202,134 @@ pub fn xray(
     Ok(
         json!({"log":{"loglevel":"warning"},"dns":dns,"inbounds":[{"tag":"sever-sidecar","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"password","accounts":[{"user":"sever","pass":password}],"udp":true,"ip":"127.0.0.1"}}],"outbounds":[{"tag":"proxy","protocol":p.protocol(),"settings":proxy,"streamSettings":stream}]}),
     )
+}
+
+pub(crate) fn xray_for_sing_box(
+    profile: &Profile,
+    password: &str,
+    settings: &Settings,
+    hosts: Option<&Value>,
+) -> Result<Option<Value>> {
+    if !matches!(profile.protocol(), "vless" | "trojan") {
+        return Ok(None);
+    }
+    match xray(profile, 0, password, settings, hosts) {
+        Ok(config) => Ok(Some(config)),
+        Err(error) if profile.requires_xray() => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn xray_desktop(
+    p: &Profile,
+    settings: &Settings,
+    hosts: Option<&Value>,
+    probe_port: Option<u16>,
+) -> Result<Value> {
+    let mut c = xray(p, settings.mixed_port, "", settings, hosts)?;
+    let ip_strategy = if settings.ipv6 { "UseIP" } else { "UseIPv4" };
+    let dns = match settings.dns_kind.as_str() {
+        "udp" => json!(settings.dns_server),
+        "https" => json!(format!("https://{}/dns-query", settings.dns_tls_name)),
+        _ => return Err("В режиме Xray выберите DNS через HTTPS или UDP.".into()),
+    };
+    let mut dns_hosts = hosts.cloned().unwrap_or_else(|| json!({}));
+    if settings.dns_kind == "https" {
+        let name = &settings.dns_tls_name;
+        if dns_hosts.get(name).is_some_and(|ips| {
+            !ips.as_array()
+                .is_some_and(|ips| ips.contains(&json!(settings.dns_server)))
+        }) {
+            return Err("TLS-имя DNS совпадает с адресом VPN-сервера, но IP различаются.".into());
+        }
+        dns_hosts[name] = json!(settings.dns_server);
+    }
+    let mut servers = vec![json!({"address": dns, "tag": "dns-remote"})];
+    let server = p.outbound["server"]
+        .as_str()
+        .ok_or("Не указан адрес VPN-сервера.")?;
+    if server.parse::<std::net::IpAddr>().is_err() && dns_hosts.get(server).is_none() {
+        let bootstrap = settings
+            .bootstrap_dns
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| "Для bootstrap DNS нужен IP-адрес.")?;
+        servers.push(json!({
+            "address": format!("tcp+local://{}", std::net::SocketAddr::new(bootstrap, 53)),
+            "domains": [format!("full:{server}")], "skipFallback": true, "finalQuery": true
+        }));
+    }
+    c["dns"] = json!({
+        "hosts": dns_hosts, "servers": servers,
+        "queryStrategy": ip_strategy, "disableFallbackIfMatch": true
+    });
+    let sniff = json!({"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true});
+    let mut inbounds = Vec::new();
+    if settings.mode == "tun" {
+        let mut addresses = vec!["172.19.0.1/30"];
+        let mut routes = vec!["0.0.0.0/0"];
+        if settings.ipv6 {
+            addresses.push("fdfe:dcba:9876::1/126");
+            routes.push("::/0");
+        }
+        inbounds.push(json!({
+            "tag":"tun-in","protocol":"tun","sniffing":sniff,
+            "settings":{"name":"LunarisXray","mtu":1500,"gateway":addresses,
+                "dns":["172.19.0.2"], "autoSystemRoutingTable":routes,
+                "autoOutboundsInterface":"auto","autoSystemWfpBlockLeak":["dns","misconfigtun"]}
+        }));
+    }
+    inbounds.push(json!({
+        "tag":"local-proxy","listen":"127.0.0.1","port":settings.mixed_port,
+        "protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"},
+        "sniffing":sniff
+    }));
+    if let Some(port) = probe_port {
+        inbounds.push(json!({"tag":"verify","listen":"127.0.0.1","port":port,"protocol":"http"}));
+    }
+    c["inbounds"] = json!(inbounds);
+    let proxy = c["outbounds"][0].clone();
+    let mut outbounds = vec![
+        proxy,
+        json!({"tag":"direct","protocol":"freedom","streamSettings":{"sockopt":{"domainStrategy":ip_strategy}}}),
+        json!({"tag":"dns-in","protocol":"dns"}),
+    ];
+    let mut rules = Vec::new();
+    if probe_port.is_some() {
+        rules.push(json!({"type":"field","inboundTag":["verify"],"outboundTag":"proxy"}));
+    }
+    if settings.dns_kind == "https" {
+        let ip = settings
+            .dns_server
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| "Для DNS нужен IP-адрес.")?;
+        outbounds.push(json!({
+            "tag":"dns-transport","protocol":"freedom",
+            "settings":{"redirect":std::net::SocketAddr::new(ip, 443).to_string()},
+            "streamSettings":{"sockopt":{"dialerProxy":"proxy"}}
+        }));
+        rules.push(
+            json!({"type":"field","inboundTag":["dns-remote"],"outboundTag":"dns-transport"}),
+        );
+    } else {
+        rules.push(json!({"type":"field","inboundTag":["dns-remote"],"outboundTag":"proxy"}));
+    }
+    rules.push(json!({"type":"field","inboundTag":["tun-in"],"port":53,"outboundTag":"dns-in"}));
+    let domains: Vec<_> = direct_domains(settings)?
+        .iter()
+        .map(|domain| format!("domain:{domain}"))
+        .collect();
+    if !domains.is_empty() {
+        rules.push(json!({"type":"field","domain":domains,"outboundTag":"direct"}));
+    }
+    c["outbounds"] = json!(outbounds);
+    c["routing"] = json!({"domainStrategy":"AsIs","rules":rules});
+    c["stats"] = json!({});
+    c["api"] = json!({
+        "tag":"local-stats","listen":format!("127.0.0.1:{}", settings.api_port),
+        "services":["StatsService"],
+    });
+    c["policy"] = json!({"system":{"statsInboundUplink":true,"statsInboundDownlink":true}});
+    Ok(c)
 }
 pub fn mihomo_proxy(p: &Profile) -> Result<Value> {
     if p.xray_grpc() {
@@ -381,31 +509,30 @@ pub fn mihomo(
     Ok(c)
 }
 pub fn android(p: &Profile, settings: &Settings, secret: &str, password: &str) -> Result<Value> {
+    if settings.core == "xray" {
+        return Err("Выберите sing-box для запуска профилей Xray на Android.".into());
+    }
     let mut settings = settings.clone();
     settings.mode = "tun".into();
     if p.xray_grpc() {
         settings.core = "sing-box".into();
     }
-    let bridge = settings.core == "mihomo" || p.requires_xray();
+    if settings.core == "mihomo" {
+        let mut config = mihomo(p, &settings, secret, None)?;
+        config["tun"] = json!({"enable":false});
+        return Ok(json!({"sever_mihomo": config}));
+    }
+    let xray_config = xray_for_sing_box(p, password, &settings, None)?;
     let mut c = sing_box(
         p,
         &settings,
         secret,
         true,
-        bridge.then(|| sidecar(0, password)),
+        xray_config.as_ref().map(|_| sidecar(0, password)),
         None,
     )?;
-    if settings.core == "mihomo" {
-        let mut m = mihomo(p, &settings, "", None)?;
-        let map = m.as_object_mut().unwrap();
-        map.remove("external-controller");
-        map.remove("secret");
-        m["mixed-port"] = json!(0);
-        m["authentication"] = json!([format!("sever:{password}")]);
-        m["tun"] = json!({"enable":false});
-        c["sever_mihomo"] = m;
-    } else if p.requires_xray() {
-        c["sever_xray"] = xray(p, 0, password, &settings, None)?;
+    if let Some(xray_config) = xray_config {
+        c["sever_xray"] = xray_config;
     }
     Ok(c)
 }

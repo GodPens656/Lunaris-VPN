@@ -148,8 +148,8 @@ UTF-8 и `base64:` ([формат метаданных](https://www.happ.su/main
 
 ## Сборка 0.7.1
 
-Нужны Rust stable MSVC, Node.js 22 LTS, Visual Studio C++ Build Tools;
-для Android — JDK 17, SDK 36, NDK 28.2 и принятые лицензии SDK.
+Нужны Rust stable MSVC, Node.js 22 LTS и Visual Studio C++ Build Tools.
+Для Android также нужны Go 1.27+, Git, JDK 17, SDK 36, NDK 28.2 и принятые лицензии SDK.
 Python 3.13 используется только инструментами подготовки и упаковки.
 
 ```powershell
@@ -172,6 +172,9 @@ URL-протокола; само по себе это не отключает и
 ```powershell
 cargo test --locked --manifest-path app/backend/Cargo.toml
 cargo clippy --locked --manifest-path app/backend/Cargo.toml --all-targets -- -D warnings
+python scripts/fetch_core.py windows
+python scripts/fetch_core.py windows --core flclash
+cargo test --locked --manifest-path app/backend/Cargo.toml --test backend bundled_cores_start_report_traffic_and_release_ports -- --ignored
 cargo build --locked --manifest-path app/backend/Cargo.toml --bin lunaris-backend-cli
 .venv/Scripts/python.exe -m pip install -e ".[dev,legacy-tests]"
 .venv/Scripts/python.exe scripts/check_rust_parity.py app/backend/target/debug/lunaris-backend-cli.exe --full -q
@@ -360,6 +363,7 @@ DPAPI текущего пользователя; обработанные и п�
 py -3.13 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe scripts\fetch_core.py windows
+.venv\Scripts\python.exe scripts\fetch_core.py windows --core flclash
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run.ps1
 ```
 
@@ -395,11 +399,13 @@ trojan://synthetic-password@example.com:443?sni=example.com#Example
 
 Сборки с исправлением `spx` и автоматическим переключением серверов: Windows — `dist/windows-mihomo-fixed`, `dist/SeverVPN-mihomo-fixed-windows-x64.zip`; Android ARM64 (Android 8.0+) — `dist/SeverVPN-mihomo-fixed-arm64.apk`. Android APK имеет versionCode 2 и прежнюю подпись для обновления предыдущей Mihomo-сборки. Исходники исправлений: `dist/SeverVPN-mihomo-fixed-source.zip`.
 
-В «Настройки → Подключение → Ядро» доступны **sing-box / Xray** и **Clash (Mihomo)** в Windows и Android. Выбор сохраняется сразу и применяется при следующем подключении; перед сменой ядра отключите VPN. Существующие профили и подписки сохраняются. На ПК по умолчанию используется **Clash (Mihomo)**, на Android — **sing-box / Xray**. Ранее сохранённый выбор ядра сохраняется при обновлении; если в старых настройках поле ядра отсутствовало, применяется новый платформенный вариант по умолчанию.
+В «Настройки → Подключение → Ядро» доступны **sing-box / Xray** и **Mihomo** на обеих платформах. В Windows есть отдельный вариант **Xray**. Выбор сохраняется сразу и применяется при следующем подключении. Значение по умолчанию в Windows — Mihomo, на Android — sing-box / Xray.
 
-Mihomo 1.19.34 автоматически скачивается скриптом сборки с проверкой SHA-256 архива, бинарника и лицензии. В Windows он самостоятельно обслуживает системный прокси или TUN, API и счётчики; Xray при этом не запускается. Можно отдельно указать путь к `mihomo.exe`; путь к sing-box сохраняется независимо.
+В Windows встроенный Mihomo запускается как `FlClashCore.exe` из FlClash v0.9.4. Lunaris передаёт команды и читает счётчики через именованный канал Windows. Для явно заданного пути к `mihomo.exe` поддерживается CLI обычного Mihomo. [Релиз FlClash](https://github.com/chen08209/FlClash/releases/tag/v0.9.4).
 
-На Android Mihomo запускается отдельным процессом из `nativeLibraryDir` (`libmihomo.so`) и обслуживает зашифрованное соединение. libbox остаётся мостом между Android TUN и локальным SOCKS5 Mihomo с одноразовым паролем. Конфигурация поступает в stdin, открытый файл с секретами не создаётся. Сокеты процесса проходят вне VPN через исключение UID приложения, как для Xray. При остановке службы или аварии Mihomo соединение очищается. Готовые официальные бинарники закреплены для arm64-v8a, x86_64 и armeabi-v7a; Gradle проверяет их SHA-256 и сохраняет исполняемый ELF без strip.
+На Android arm64 FlClash в отдельном процессе VPN-службы получает TUN-дескриптор от `VpnService` и защищает исходящие сокеты через `VpnService.protect()`. Конфигурация загружается из временного файла в приватном каталоге приложения. Служба удаляет файл после загрузки и очищает остаток при следующем запуске. Сборка использует зафиксированный исходный код FlClash и его подмодуль Mihomo.
+
+В режиме **sing-box / Xray** sing-box управляет TUN, DNS и маршрутизацией, а совместимые VLESS и Trojan обрабатывает Xray через локальный SOCKS с одноразовым паролем. Hysteria2 и профили с параметрами, которые адаптер Xray не поддерживает, обслуживает sing-box. В отдельном режиме **Xray** на Windows Xray самостоятельно поднимает системный прокси или TUN для VLESS и Trojan. Для него доступны DNS через HTTPS и UDP. Выбор ядра TUN основан на публичной документации Happ. [Настройки туннеля Happ](https://github.com/HappDev/happ_su/blob/main/dev-docs/app-management.md).
 
 Поддерживаются VLESS TCP/Reality/Vision, WS, gRPC, HTTP/HTTP2, HTTPUpgrade и XHTTP; Trojan TCP/WS/gRPC/HTTPUpgrade; Hysteria2 с Salamander и ECH. Reality `spx` сохраняется в профиле и больше не блокирует Mihomo: этот параметр задаёт путь обхода сайта при неуспешной авторизации в Xray, а не параметр успешного Reality handshake. Mihomo использует собственный fallback без настройки spiderX; подключение остаётся на выбранном ядре, с обычной проверкой авторизации и HTTPS. Различие записывается в журнал без значения `spx`. Trojan HTTP/HTTP2 по-прежнему требует sing-box / Xray. Формат импорта остаётся списком URI/Base64 или локальным JSON со ссылками; произвольный Clash YAML не импортируется.
 
@@ -408,9 +414,9 @@ Mihomo 1.19.34 автоматически скачивается скрипто�
 Для Reality с явным `support-x25519mlkem768=true` адаптер Mihomo использует `client-fingerprint: chrome`. Так ядро отправляет X25519MLKEM768 даже для профилей, чей fingerprint не включает эту группу: переключатель Mihomo сохраняет имеющийся key share, но не добавляет новый. Замена применяется при построении конфигурации Mihomo и записывается в журнал. При отсутствующем или ложном флаге используется fingerprint из профиля. [Шаблоны uTLS](https://github.com/MetaCubeX/utls/blob/v1.9.0-alpha.1/u_common.go), [обработка Reality](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/tls/reality.go).
 
 ```powershell
-# Получить только дополнительное ядро, без повторной загрузки sing-box/Xray
-.venv\Scripts\python.exe scripts\fetch_core.py windows --core mihomo
-.venv\Scripts\python.exe scripts\fetch_core.py android --core mihomo
+# Получить FlClashCore для Windows или собрать библиотеку для Android
+.venv\Scripts\python.exe scripts\fetch_core.py windows --core flclash
+.venv\Scripts\python.exe scripts\build_flclash_android.py --ndk "$env:NDK_HOME"
 ```
 
 Источник и схема: [официальный релиз Mihomo 1.19.34](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34), [конфигурация Mihomo](https://wiki.metacubex.one/en/config/).

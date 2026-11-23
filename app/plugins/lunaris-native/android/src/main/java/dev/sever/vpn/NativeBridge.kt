@@ -30,6 +30,8 @@ private class NativeCall(val method: String, private val args: JSONObject) {
 /** Only permission, protected storage and Binder IPC; VPN packets stay in :vpn. */
 class NativeBridge(private val activity: Activity) {
     private val context: Context = activity.applicationContext
+    private val vpnPrefs = context.getSharedPreferences("vpn_service", Context.MODE_PRIVATE)
+    private var useMihomo = vpnPrefs.getBoolean("mihomo", false)
     private var service: Messenger? = null
     private var bound = false
     private val importLinks = java.util.ArrayDeque<String>()
@@ -64,6 +66,7 @@ class NativeBridge(private val activity: Activity) {
     private val reply = Messenger(object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(message: Message) {
             if (message.what != 10 && message.what != 11) return
+            if (message.data.getBoolean("mihomo") != useMihomo) return
             snapshot = message.data.keySet().associateWith { message.data.get(it) }
             pendingSnapshots.toList().forEach { it.success(snapshot) }
             pendingSnapshots.clear()
@@ -73,10 +76,12 @@ class NativeBridge(private val activity: Activity) {
     })
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            if (name.className != vpnServiceClass().name) return
             service = Messenger(binder)
             requestSnapshot()
         }
         override fun onServiceDisconnected(name: ComponentName) {
+            if (name.className != vpnServiceClass().name) return
             service = null
             snapshot = if (pendingStops.isNotEmpty()) mapOf("status" to "disconnected")
                 else mapOf("status" to "error", "error" to "VPN service process stopped")
@@ -87,8 +92,15 @@ class NativeBridge(private val activity: Activity) {
     }
 
     init {
-        bound = context.bindService(Intent(context, SeverVpnService::class.java), connection, Context.BIND_AUTO_CREATE)
+        bindVpnService()
         activity.intent?.let { acceptIntent(it) }
+    }
+
+    private fun vpnServiceClass() =
+        if (useMihomo) MihomoVpnService::class.java else SeverVpnService::class.java
+
+    private fun bindVpnService() {
+        bound = context.bindService(Intent(context, vpnServiceClass()), connection, Context.BIND_AUTO_CREATE)
     }
 
     fun acceptIntent(intent: Intent) {
@@ -257,7 +269,14 @@ class NativeBridge(private val activity: Activity) {
             current.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             current.requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 43103)
         }
-        val intent = Intent(context, SeverVpnService::class.java).apply {
+        val mihomo = JSONObject(checkNotNull(pendingConfig)).has("sever_mihomo")
+        if (useMihomo != mihomo) {
+            if (bound) context.unbindService(connection)
+            service = null
+            useMihomo = mihomo
+            bindVpnService()
+        }
+        val intent = Intent(context, vpnServiceClass()).apply {
             action = "CONNECT"
             putExtra("config", pendingConfig)
             putExtra("probe", pendingProbe)
@@ -265,6 +284,7 @@ class NativeBridge(private val activity: Activity) {
             putExtra("server_name", pendingServerName)
         }
         context.startForegroundService(intent)
+        vpnPrefs.edit().putBoolean("mihomo", useMihomo).apply()
     }
 
 }
