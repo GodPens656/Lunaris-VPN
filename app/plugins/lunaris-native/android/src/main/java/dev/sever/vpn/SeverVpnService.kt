@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
 import java.util.Collections
 
 /** Independent :vpn process: TUN, network changes, health checks and traffic counters. */
-open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandler {
+open class SeverVpnService(private val proxyOnly: Boolean = false) : VpnService(), PlatformInterface, CommandServerHandler {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val serial = Mutex()
     private var command: CommandServer? = null
@@ -52,6 +52,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
     private var verifyConnection = true
     private var poll: Job? = null
     private var startup: Job? = null
+    private var proxyProbeId: String? = null
     private var notificationMonitor: Job? = null
     private var wakeReceiverRegistered = false
     @Volatile private var stopping = false
@@ -82,6 +83,11 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
     }
     private val messenger = Messenger(object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
+            if (proxyOnly) {
+                if (msg.what == ProxyProbeBinding.START) startProxyProbe(msg)
+                if (msg.what == ProxyProbeBinding.STOP && msg.data.getString("id") == proxyProbeId) startup?.cancel()
+                return
+            }
             msg.replyTo?.let { subscribers.add(it) }
             if (msg.what == 2) requestStop(msg.replyTo)
             else broadcast()
@@ -90,8 +96,9 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
 
     override fun onCreate() {
         super.onCreate()
-        if (this is MihomoVpnService) File(filesDir, "mihomo-core/config.yaml").delete()
         connectivity = getSystemService(ConnectivityManager::class.java)
+        if (proxyOnly) return
+        if (this is MihomoVpnService) File(filesDir, "mihomo-core/config.yaml").delete()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel("sever-vpn", "Lunaris client", NotificationManager.IMPORTANCE_LOW))
         val wakeFilter = IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_USER_PRESENT) }
@@ -105,6 +112,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (proxyOnly) { stopSelfResult(startId); return START_NOT_STICKY }
         if (intent?.action == RESTORE_NOTIFICATION) {
             notifications.restore()
             // A late dismissal must never restart a stopped VPN or leave an idle service.
@@ -150,14 +158,9 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
                         startupStep = "Не удалось создать VPN-туннель FlClashCore."
                         startMihomo(mihomoConfig)
                     } else {
-                        val xrayConfig = doc.optJSONObject("sever_xray")
-                        doc.remove("sever_xray")
-                        if (xrayConfig != null) {
+                        if (doc.has("sever_xray")) {
                             startupStep = "Не удалось запустить Xray на Android."
-                            val port = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
-                            xrayConfig.getJSONArray("inbounds").getJSONObject(0).put("port", port)
-                            doc.getJSONArray("outbounds").getJSONObject(0).put("server_port", port)
-                            startXray(xrayConfig.toString(), port)
+                            startXrayBridge(doc)
                         }
                         startupStep = "Не удалось создать Android VPN-туннель sing-box. Проверьте разрешение VPN."
                         startSingBox(doc)
@@ -284,18 +287,72 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         if (!passed) throw ProbeFailure("HTTPS-проверка VPN не завершилась.")
     }
 
+    private fun startProxyProbe(message: Message) {
+        val id = message.data.getString("id") ?: return
+        val config = message.data.getString("config") ?: return
+        val url = message.data.getString("probe_url") ?: return
+        val port = message.data.getInt("port")
+        val reply = message.replyTo ?: return
+        fun report(ready: Boolean) {
+            runCatching { reply.send(Message.obtain(null, ProxyProbeBinding.READY, if (ready) 1 else 0, 0)) }
+        }
+        startup?.cancel()
+        proxyProbeId = id
+        startup = scope.launch {
+            // An immediately rebound service must wait for the previous instance's cleanup.
+            proxyCore.withLock {
+                try {
+                    withTimeout(30_000) {
+                        val doc = JSONObject(config)
+                        val mihomo = doc.optJSONObject("sever_mihomo")
+                        check((this@SeverVpnService is MihomoProxyProbeService) == (mihomo != null))
+                        if (mihomo != null) {
+                            mihomoActive = true
+                            MihomoNative.configure(File(filesDir, "probe-mh"), mihomo, url)
+                        } else {
+                            startXrayBridge(doc)
+                            startSingBox(doc)
+                        }
+                        ensureActive()
+                        Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 500) }
+                        report(true)
+                        awaitCancellation()
+                    }
+                } catch (_: TimeoutCancellationException) {
+                    report(false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    report(false)
+                } catch (_: LinkageError) {
+                    report(false)
+                } finally {
+                    cleanup()
+                }
+            }
+        }
+    }
+
+    private suspend fun startXrayBridge(doc: JSONObject) {
+        val config = doc.remove("sever_xray") as? JSONObject ?: return
+        val port = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        config.getJSONArray("inbounds").getJSONObject(0).put("port", port)
+        doc.getJSONArray("outbounds").getJSONObject(0).put("server_port", port)
+        startXray(config.toString(), port)
+    }
+
     private suspend fun startXray(config: String, port: Int) {
         // An executable in nativeLibraryDir is permitted by Android 10+ W^X policy.
         // Keep it in a separate process: libbox and Xray each embed a Go runtime.
         val executable = File(applicationInfo.nativeLibraryDir, "libxray.so")
         if (!executable.canExecute()) throw IllegalStateException("Xray is missing for this ABI")
         val version = ProcessBuilder(executable.absolutePath, "version").redirectErrorStream(true).start()
-        if (!version.waitFor(10, TimeUnit.SECONDS)) {
-            version.destroyForcibly()
-            throw IllegalStateException()
+        try {
+            check(runInterruptible { version.waitFor(10, TimeUnit.SECONDS) })
+            check(version.exitValue() == 0 && version.inputStream.bufferedReader().use { it.readText() }.startsWith("Xray 26.11.9 "))
+        } finally {
+            if (version.isAlive) version.destroyForcibly()
         }
-        if (version.exitValue() != 0 || !version.inputStream.bufferedReader().use { it.readText() }.startsWith("Xray 26.11.9 "))
-            throw IllegalStateException()
         val process = ProcessBuilder(executable.absolutePath, "run", "-c", "stdin:")
             .redirectErrorStream(true).start()
         xray = process
@@ -320,7 +377,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         apiPort = api.getString("external_controller").substringAfterLast(':').toInt()
         apiSecret = api.getString("secret")
         Seq.setContext(applicationContext)
-        val base = File(filesDir, "native-core").apply { mkdirs() }
+        val base = File(filesDir, if (proxyOnly) "probe-sb" else "native-core").apply { mkdirs() }
         Libbox.setup(SetupOptions().apply {
             basePath = base.absolutePath
             workingPath = base.absolutePath
@@ -331,7 +388,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         })
         check(Libbox.version() == "1.14.4")
         Libbox.checkConfig(nativeConfig)
-        registerNetwork()
+        if (!proxyOnly) registerNetwork()
         val server = CommandServer(this, this)
         command = server
         server.start()
@@ -420,7 +477,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         runCatching { server?.close() }
         if (mihomoActive) {
             mihomoActive = false
-            runCatching { MihomoNative.stop() }
+            runCatching { MihomoNative.stop(proxyOnly) }
         }
         xray?.let { process ->
             runCatching {
@@ -434,7 +491,7 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         xray = null
         xrayLogs?.cancel(); xrayLogs = null
         network = null; interfaceListener = null
-        runCatching { setUnderlyingNetworks(null) }
+        if (!proxyOnly) runCatching { setUnderlyingNetworks(null) }
         apiSecret = ""; started = 0
         initializing = false
     }
@@ -447,14 +504,21 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
     private companion object {
         const val NOTIFICATION_ID = 4001
         const val RESTORE_NOTIFICATION = "dev.sever.vpn.RESTORE_NOTIFICATION"
+        val proxyCore = Mutex()
     }
     override fun onRevoke() {
+        if (proxyOnly) { main.post { startup?.cancel() }; return }
         // Android has switched to another VPN (or the user disconnected in
         // Settings). Cancel startup/probes immediately and release our session
         // normally, so the next tap can take ownership back through prepare().
         main.post { requestStop() }
     }
     override fun onDestroy() {
+        if (proxyOnly) {
+            scope.cancel()
+            super.onDestroy()
+            return
+        }
         cleanup()
         if (wakeReceiverRegistered) runCatching { unregisterReceiver(wakeReceiver) }
         wakeReceiverRegistered = false
@@ -508,13 +572,14 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
         val props = current?.let { connectivity.getLinkProperties(it) }
         val name = props?.interfaceName ?: ""
         val index = if (name.isNotEmpty()) runCatching { JavaInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1) else -1
-        setUnderlyingNetworks(current?.let { arrayOf(it) })
+        if (!proxyOnly) setUnderlyingNetworks(current?.let { arrayOf(it) })
         interfaceListener?.updateDefaultInterface(name, index, current?.let { connectivity.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false } ?: false, false)
     }
 
-    override fun usePlatformAutoDetectInterfaceControl() = true
+    override fun usePlatformAutoDetectInterfaceControl() = !proxyOnly
     override fun autoDetectInterfaceControl(fd: Int) { if (!protect(fd)) throw IllegalStateException() }
     override fun openTun(options: TunOptions): Int {
+        check(!proxyOnly)
         if (prepare(this) != null) throw IllegalStateException()
         val builder = Builder().setSession("Lunaris client").setMtu(options.mtu)
         // Child cores cannot call VpnService.protect themselves. Excluding
@@ -611,3 +676,5 @@ open class SeverVpnService : VpnService(), PlatformInterface, CommandServerHandl
 
 /** Separate Go runtime and lifecycle for the FlClash VPN core. */
 class MihomoVpnService : SeverVpnService()
+class SingBoxProxyProbeService : SeverVpnService(proxyOnly = true)
+class MihomoProxyProbeService : SeverVpnService(proxyOnly = true)

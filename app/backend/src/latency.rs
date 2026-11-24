@@ -64,9 +64,20 @@ pub async fn measure(p: &Profile, s: &Settings, method: &str, connected: bool) -
     }
 }
 pub async fn proxy(s: &Settings) -> Latency {
+    proxy_get(
+        &s.probe_url,
+        &format!("http://127.0.0.1:{}", s.mixed_port),
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn proxy_get(url: &str, proxy_url: &str, password: Option<&str>) -> Latency {
     let result = async {
-        let proxy =
-            reqwest::Proxy::all(format!("http://127.0.0.1:{}", s.mixed_port)).map_err(|_| ())?;
+        let mut proxy = reqwest::Proxy::all(proxy_url).map_err(|_| ())?;
+        if let Some(password) = password {
+            proxy = proxy.basic_auth("lunaris", password);
+        }
         let client = reqwest::Client::builder()
             .no_proxy()
             .proxy(proxy)
@@ -75,7 +86,7 @@ pub async fn proxy(s: &Settings) -> Latency {
             .build()
             .map_err(|_| ())?;
         let start = Instant::now();
-        let response = client.get(&s.probe_url).send().await.map_err(|_| ())?;
+        let response = client.get(url).send().await.map_err(|_| ())?;
         Ok::<_, ()>(if response.status().is_success() {
             Latency::ok(start.elapsed().as_secs_f64() * 1000.)
         } else {

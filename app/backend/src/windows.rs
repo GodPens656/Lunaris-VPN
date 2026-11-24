@@ -435,7 +435,7 @@ struct Session {
     proxy: Option<Proxy>,
     api: Option<CoreApi>,
     started: Option<Instant>,
-    http_checks: Option<(u16, watch::Sender<()>)>,
+    http_check_proxy: watch::Sender<Option<u16>>,
     state: CoreState,
 }
 impl Session {
@@ -448,12 +448,12 @@ impl Session {
             proxy: (!probe).then(|| Proxy::new(directory)),
             api: None,
             started: None,
-            http_checks: None,
+            http_check_proxy: watch::channel(None).0,
             state: CoreState::default(),
         }
     }
     async fn stop(&mut self) -> Result<()> {
-        self.http_checks = None;
+        self.http_check_proxy.send_replace(None);
         if let Some(CoreApi::FlClash(mut core)) = self.api.take() {
             core.stop().await;
             drop(core);
@@ -783,7 +783,9 @@ impl WindowsHost {
             }
         }
         session.started = Some(Instant::now());
-        session.http_checks = Some((settings.mixed_port, watch::channel(()).0));
+        session
+            .http_check_proxy
+            .send_replace(Some(settings.mixed_port));
         session.state = CoreState {
             status: "connected".into(),
             ..Default::default()
@@ -1022,20 +1024,41 @@ async fn xray_traffic(exe: &Path, api: &str) -> Result<(u64, u64)> {
     }
     Ok((upload, download))
 }
-async fn check_http_sites(port: u16) -> Result<Value> {
-    let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
-        .map_err(|_| "Некорректный адрес локального прокси.")?;
-    let client = reqwest::Client::builder()
+async fn check_http_sites(proxy_port: Option<u16>) -> Result<Value> {
+    check_site_urls(
+        proxy_port,
+        &[
+            ("yandex.ru", "https://yandex.ru/"),
+            ("youtube.com", "https://www.youtube.com/"),
+            ("google.com", "https://www.google.com/"),
+            ("github.com", "https://github.com/"),
+        ],
+    )
+    .await
+}
+
+async fn check_site_urls(proxy_port: Option<u16>, checks: &[(&str, &str)]) -> Result<Value> {
+    let mut builder = reqwest::Client::builder()
         .no_proxy()
-        .proxy(proxy)
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(Duration::from_secs(5));
+    if let Some(port) = proxy_port {
+        let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
+            .map_err(|_| "Некорректный адрес локального прокси.")?;
+        builder = builder.proxy(proxy);
+    }
+    let client = builder
         .build()
         .map_err(|_| "Не удалось начать проверку сайтов.")?;
     let client = &client;
-    let checks = ["yandex.ru", "youtube.com", "google.com", "github.com"];
-    let results = futures_util::future::join_all(checks.into_iter().map(|domain| async move {
-        match client.get(format!("http://{domain}/")).send().await {
+    let results = futures_util::future::join_all(checks.iter().map(|&(domain, url)| async move {
+        let started = Instant::now();
+        match client.get(url).send().await {
+            Ok(response) if response.status().is_success() => json!({
+                "domain": domain,
+                "status": response.status().as_u16(),
+                "milliseconds": started.elapsed().as_secs_f64() * 1000.,
+            }),
             Ok(response) => json!({"domain":domain,"status":response.status().as_u16()}),
             Err(error) => json!({"domain":domain,"error":if error.is_timeout() { "timeout" } else { "unreachable" }}),
         }
@@ -1053,11 +1076,11 @@ mod http_check_tests {
     };
 
     #[tokio::test]
-    async fn sites_use_socks_and_report_the_first_http_response() {
+    async fn sites_follow_redirects_through_socks_and_time_successful_responses() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let proxy = tokio::spawn(async move {
-            for _ in 0..4 {
+            for _ in 0..5 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut greeting = [0; 3];
                 socket.read_exact(&mut greeting).await.unwrap();
@@ -1077,7 +1100,8 @@ mod http_check_tests {
                 let mut input = BufReader::new(&mut socket);
                 let mut line = String::new();
                 input.read_line(&mut line).await.unwrap();
-                assert_eq!(line, "GET / HTTP/1.1\r\n");
+                let redirected = line == "GET /final HTTP/1.1\r\n";
+                assert!(redirected || line == "GET / HTTP/1.1\r\n");
                 loop {
                     line.clear();
                     if input.read_line(&mut line).await.unwrap() == 0 || line == "\r\n" {
@@ -1085,28 +1109,76 @@ mod http_check_tests {
                     }
                 }
                 let response = match host.as_slice() {
-                    b"yandex.ru" => "302 Found\r\nLocation: https://yandex.ru/",
+                    b"yandex.ru" if !redirected => "301 Moved Permanently\r\nLocation: /final",
+                    b"yandex.ru" => "204 No Content",
                     b"youtube.com" => "403 Forbidden",
                     b"google.com" => "200 OK",
                     b"github.com" => continue,
                     other => panic!("Unexpected request to {other:?}"),
                 };
                 socket
-                    .write_all(format!("HTTP/1.1 {response}\r\nContent-Length: 0\r\n\r\n").as_bytes())
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {response}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
                     .await
                     .unwrap();
             }
         });
+        let results = check_site_urls(
+            Some(port),
+            &[
+                ("yandex.ru", "http://yandex.ru/"),
+                ("youtube.com", "http://youtube.com/"),
+                ("google.com", "http://google.com/"),
+                ("github.com", "http://github.com/"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(results[0]["domain"], "yandex.ru");
+        assert_eq!(results[0]["status"], 204);
+        assert!(results[0]["milliseconds"].as_f64().unwrap() >= 0.);
+        assert_eq!(results[1], json!({"domain":"youtube.com","status":403}));
+        assert_eq!(results[2]["status"], 200);
+        assert!(results[2]["milliseconds"].as_f64().unwrap() >= 0.);
         assert_eq!(
-            check_http_sites(port).await.unwrap(),
-            json!([
-                {"domain":"yandex.ru","status":302},
-                {"domain":"youtube.com","status":403},
-                {"domain":"google.com","status":200},
-                {"domain":"github.com","error":"unreachable"},
-            ])
+            results[3],
+            json!({"domain":"github.com","error":"unreachable"})
         );
         proxy.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sites_time_the_response_headers_without_a_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = BufReader::new(&mut socket);
+            let mut line = String::new();
+            request.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "GET / HTTP/1.1\r\n");
+            loop {
+                line.clear();
+                if request.read_line(&mut line).await.unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
+                .await
+                .unwrap();
+            // Leave the body unfinished until the check returns.
+            socket.read_u8().await.ok();
+        });
+        let results = check_site_urls(None, &[("local", &url)]).await.unwrap();
+        assert_eq!(results[0]["status"], 200);
+        assert!(results[0]["milliseconds"].as_f64().unwrap() >= 25.);
+        server.abort();
     }
 }
 
@@ -1119,17 +1191,15 @@ impl Host for WindowsHost {
         dpapi(data, true)
     }
     async fn check_http_sites(&self) -> Result<Value> {
-        let (port, mut connection) = self
-            .session
-            .lock()
-            .await
-            .http_checks
-            .as_ref()
-            .map(|(port, session)| (*port, session.subscribe()))
-            .ok_or("Подключите VPN, чтобы проверить сайты.")?;
+        let (port, mut connection) = {
+            let session = self.session.lock().await;
+            let mut connection = session.http_check_proxy.subscribe();
+            let port = *connection.borrow_and_update();
+            (port, connection)
+        };
         tokio::select! {
             biased;
-            _ = connection.changed() => Err("Подключение завершилось во время проверки.".into()),
+            _ = connection.changed() => Err("Подключение изменилось во время проверки.".into()),
             results = check_http_sites(port) => results,
         }
     }

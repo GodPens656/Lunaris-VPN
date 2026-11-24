@@ -659,17 +659,17 @@ impl Engine {
                 if !["tcp", "icmp", "proxy"].contains(&method.as_str()) {
                     return Err("Неизвестный метод измерения.".into());
                 }
-                if self.host.android() && method == "proxy" && !selected_only {
-                    return Err(
-                        "На Android массовая проверка доступна через TCP/UDP и ICMP.".into(),
-                    );
-                }
                 {
                     let mut i = self.inner.lock().await;
                     i.results.clear();
                     i.measure_total = profiles.len();
                 }
                 let e = self.clone();
+                let concurrency = if e.host.android() && method == "proxy" && !selected_only {
+                    1
+                } else {
+                    8
+                };
                 *self.measurement.lock().await = Some(tokio::spawn(async move {
                     stream::iter(profiles)
                         .map(|p| {
@@ -685,7 +685,7 @@ impl Engine {
                                 e.inner.lock().await.results.insert(p.key(), result);
                             }
                         })
-                        .buffer_unordered(8)
+                        .buffer_unordered(concurrency)
                         .collect::<Vec<_>>()
                         .await;
                 }));
@@ -751,6 +751,66 @@ impl Host for AndroidHost {
     async fn open_update_url(&self, url: &str) -> Result<()> {
         self.invoke("open_update_url", json!({"url":url})).await?;
         Ok(())
+    }
+    async fn probe(&self, profile: &Profile, settings: &Settings) -> Latency {
+        let listener = || std::net::TcpListener::bind("127.0.0.1:0");
+        let ports = (|| {
+            let proxy = listener()?;
+            let api = listener()?;
+            Ok::<_, std::io::Error>((proxy.local_addr()?.port(), api.local_addr()?.port()))
+        })();
+        let Ok((port, api_port)) = ports else {
+            return Latency::error("Нет свободного порта");
+        };
+        let mut settings = settings.clone();
+        settings.mixed_port = port;
+        settings.api_port = api_port;
+        let password = secret();
+        let config = match config::android_proxy_probe(profile, &settings, &secret(), &password) {
+            Ok(config) => config,
+            Err(error) => return Latency::error(&error),
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let (mut send, receive) = tokio::sync::oneshot::channel();
+        let host = Self {
+            call: self.call.clone(),
+        };
+        // Keep ownership of the native lease if the measurement task is cancelled.
+        tokio::spawn(async move {
+            let start = host.invoke(
+                "proxy_probe_start",
+                json!({
+                    "id": id, "config": config.to_string(), "probe_url": settings.probe_url,
+                    "port": port, "mihomo": config.get("sever_mihomo").is_some(),
+                }),
+            );
+            let result = async {
+                start.await?;
+                Ok::<_, String>(
+                    latency::proxy_get(
+                        &settings.probe_url,
+                        &format!("socks5h://127.0.0.1:{port}"),
+                        Some(&password),
+                    )
+                    .await,
+                )
+            };
+            let result = tokio::select! {
+                biased;
+                _ = send.closed() => None,
+                result = tokio::time::timeout(Duration::from_secs(30), result) => Some(match result {
+                    Ok(Ok(result)) => result,
+                    _ => Latency::error("Прокси сервера недоступен"),
+                }),
+            };
+            let _ = host.invoke("proxy_probe_stop", json!({"id": id})).await;
+            if let Some(result) = result {
+                let _ = send.send(result);
+            }
+        });
+        receive
+            .await
+            .unwrap_or_else(|_| Latency::error("Прокси сервера недоступен"))
     }
 }
 impl AndroidHost {

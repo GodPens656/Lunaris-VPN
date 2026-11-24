@@ -54,12 +54,14 @@ internal object MihomoNative {
         return (result?.optInt("value") ?: 0) > 0
     }
 
-    fun stop() {
-        stopTun()
+    fun stop(proxyOnly: Boolean = false) {
+        if (!proxyOnly) stopTun()
         try {
             request("connection.closeAll")
         } finally {
-            request("config.update", JSONObject().put("external-controller", "").put("secret", ""))
+            val changes = JSONObject().put("external-controller", "").put("secret", "")
+            if (proxyOnly) changes.put("mixed-port", 0)
+            request("config.update", changes)
         }
     }
 }

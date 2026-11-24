@@ -63,6 +63,8 @@ class NativeBridge(private val activity: Activity) {
         },
     )
     private val handler = Handler(Looper.getMainLooper())
+    private val proxyProbe = ProxyProbeBinding(context, handler)
+    private var closed = false
     private val reply = Messenger(object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(message: Message) {
             if (message.what != 10 && message.what != 11) return
@@ -114,6 +116,8 @@ class NativeBridge(private val activity: Activity) {
     private fun onPermissionResult(granted: Boolean) { permissionRequest.onResult(granted) }
 
     fun close() {
+        closed = true
+        proxyProbe.close()
         permissionRequest.cancel("unavailable")
         VpnPermissionActivity.cancel()
         if (bound) context.unbindService(connection)
@@ -148,7 +152,10 @@ class NativeBridge(private val activity: Activity) {
             }
         }
         handler.post {
-            try { onNativeCall(NativeCall(method, JSONObject(arguments)), result) }
+            try {
+                if (closed) result.error("unavailable", "Bridge closed", null)
+                else onNativeCall(NativeCall(method, JSONObject(arguments)), result)
+            }
             catch (_: Exception) { result.error("unavailable", "Native bridge unavailable", null) }
         }
         return try { future.get(120, TimeUnit.SECONDS) }
@@ -227,6 +234,24 @@ class NativeBridge(private val activity: Activity) {
                 handler.postDelayed({
                     if (pendingSnapshots.remove(result)) result.success(mapOf("status" to "error", "error" to "VPN service did not respond"))
                 }, 5000)
+            }
+            "proxy_probe_start" -> {
+                val id = call.argument<String>("id")
+                val config = call.argument<String>("config")
+                val url = call.argument<String>("probe_url")
+                val port = call.argument<Int>("port")
+                if (id == null || config == null || config.length > 262144 || url == null || port == null || port !in 1..65535) {
+                    result.error("unavailable", "Invalid proxy probe configuration", null)
+                    return
+                }
+                proxyProbe.start(id, config, url, port, call.argument<Boolean>("mihomo") == true) { ready ->
+                    if (ready) result.success(null)
+                    else result.error("unavailable", "Proxy probe could not start", null)
+                }
+            }
+            "proxy_probe_stop" -> {
+                call.argument<String>("id")?.let(proxyProbe::stop)
+                result.success(null)
             }
             "connect" -> {
                 val config = call.argument<String>("config")

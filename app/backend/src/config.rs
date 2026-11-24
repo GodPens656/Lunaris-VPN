@@ -31,6 +31,23 @@ pub fn sing_box(
     sidecar: Option<Value>,
     hosts: Option<&Value>,
 ) -> Result<Value> {
+    if android && settings.mode != "tun" {
+        settings.validate()?;
+        let mut settings = settings.clone();
+        settings.mode = "tun".into();
+        return sing_box_config(p, &settings, secret, android, sidecar, hosts);
+    }
+    sing_box_config(p, settings, secret, android, sidecar, hosts)
+}
+
+fn sing_box_config(
+    p: &Profile,
+    settings: &Settings,
+    secret: &str,
+    android: bool,
+    sidecar: Option<Value>,
+    hosts: Option<&Value>,
+) -> Result<Value> {
     settings.validate()?;
     if p.requires_xray() && sidecar.is_none() {
         return Err("Для этого профиля требуется запуск Xray вместе с sing-box.".into());
@@ -51,7 +68,7 @@ pub fn sing_box(
     let mut inbounds = vec![
         json!({"type":"mixed","tag":"local-proxy","listen":"127.0.0.1","listen_port":settings.mixed_port}),
     ];
-    if settings.mode == "tun" || android {
+    if settings.mode == "tun" {
         let mut addresses = vec!["172.19.0.1/30"];
         if settings.ipv6 {
             addresses.push("fdfe:dcba:9876::1/126");
@@ -83,7 +100,7 @@ pub fn sing_box(
         .map(|h| json!({"type":"hosts","tag":"bootstrap","predefined":h}))
         .unwrap_or_else(|| json!({"type":"udp","tag":"bootstrap","server":settings.bootstrap_dns}));
     Ok(
-        json!({"log":{"level":"info","timestamp":false},"dns":{"servers":[bootstrap,remote],"final":"remote","strategy":if settings.ipv6{"prefer_ipv4"}else{"ipv4_only"}},"inbounds":inbounds,"outbounds":[proxy,direct],"route":{"auto_detect_interface":settings.mode=="tun"||android,"default_domain_resolver":"bootstrap","final":"proxy","rules":rules},"experimental":{"clash_api":{"external_controller":format!("127.0.0.1:{}",settings.api_port),"secret":secret}}}),
+        json!({"log":{"level":"info","timestamp":false},"dns":{"servers":[bootstrap,remote],"final":"remote","strategy":if settings.ipv6{"prefer_ipv4"}else{"ipv4_only"}},"inbounds":inbounds,"outbounds":[proxy,direct],"route":{"auto_detect_interface":settings.mode=="tun","default_domain_resolver":"bootstrap","final":"proxy","rules":rules},"experimental":{"clash_api":{"external_controller":format!("127.0.0.1:{}",settings.api_port),"secret":secret}}}),
     )
 }
 pub fn xray(
@@ -513,11 +530,39 @@ pub fn mihomo(
     Ok(c)
 }
 pub fn android(p: &Profile, settings: &Settings, secret: &str, password: &str) -> Result<Value> {
+    android_config(p, settings, secret, password, true)
+}
+
+pub fn android_proxy_probe(
+    p: &Profile,
+    settings: &Settings,
+    secret: &str,
+    password: &str,
+) -> Result<Value> {
+    let mut settings = settings.clone();
+    settings.bypass_russian_domains = false;
+    settings.bypass_domains.clear();
+    let mut config = android_config(p, &settings, secret, password, false)?;
+    if let Some(mihomo) = config.get_mut("sever_mihomo") {
+        mihomo["authentication"] = json!([format!("lunaris:{password}")]);
+    } else {
+        config["inbounds"][0]["users"] = json!([{"username":"lunaris","password":password}]);
+    }
+    Ok(config)
+}
+
+fn android_config(
+    p: &Profile,
+    settings: &Settings,
+    secret: &str,
+    password: &str,
+    tun: bool,
+) -> Result<Value> {
     if settings.core == "xray" {
         return Err("Выберите sing-box для запуска профилей Xray на Android.".into());
     }
     let mut settings = settings.clone();
-    settings.mode = "tun".into();
+    settings.mode = if tun { "tun" } else { "proxy" }.into();
     if p.xray_grpc() {
         settings.core = "sing-box".into();
     }
@@ -527,7 +572,7 @@ pub fn android(p: &Profile, settings: &Settings, secret: &str, password: &str) -
         return Ok(json!({"sever_mihomo": config}));
     }
     let xray_config = xray_for_sing_box(p, password, &settings, None)?;
-    let mut c = sing_box(
+    let mut c = sing_box_config(
         p,
         &settings,
         secret,

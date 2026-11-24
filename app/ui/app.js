@@ -115,7 +115,7 @@ function homeProfiles(){
  const selected=state.profiles.find(p=>p.key===state.selected);
  return selected?state.profiles.filter(p=>(p.source_id??null)===(selected.source_id??null)):state.profiles;
 }
-function bulkLatencySelect(){return `<select id="bulk-method" aria-label="Способ проверки задержки серверов"><option value="tcp" ${bulkMethod==='tcp'?'selected':''}>TCP/UDP</option><option value="icmp" ${bulkMethod==='icmp'?'selected':''}>ICMP</option>${state.platform==='windows'?`<option value="proxy" ${bulkMethod==='proxy'?'selected':''}>PROXY GET</option>`:''}</select>`;}
+function bulkLatencySelect(){return `<select id="bulk-method" aria-label="Способ проверки задержки серверов"><option value="tcp" ${bulkMethod==='tcp'?'selected':''}>TCP/UDP</option><option value="icmp" ${bulkMethod==='icmp'?'selected':''}>ICMP</option><option value="proxy" ${bulkMethod==='proxy'?'selected':''}>PROXY GET</option></select>`;}
 function sortedProfiles(profiles){
  if(settingValue('auto_sort_ping')===false)return profiles;
  const ping=p=>{const r=state.latency[p.key];return !r?.error&&typeof r?.milliseconds==='number'&&Number.isFinite(r.milliseconds)&&r.milliseconds>=0?r.milliseconds:Infinity;};
@@ -206,7 +206,7 @@ function settings(){
  ${section('Обновление приложения','refresh',`<p class="helper">Новые версии проверяются при запуске. Источник: GitHub · GodPens656/Lunaris-VPN.</p>${btn('Проверить обновление','check-app-update','refresh')}`)}
  <div class="settings-footer"><span id="settings-save-status" class="helper" role="status" aria-live="polite">Настройки сохраняются автоматически.</span><span class="helper">Изменения подключения применятся при следующем сеансе.</span></div></form>
  ${section('Внешний вид','moon','<p class="muted">Тема, цвет и оформление приложения.</p>'+btn('Настроить оформление','appearance','moon'))}
- <p class="muted">Lunaris client 0.7.1 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;
+ <p class="muted">Lunaris client 0.8.0 · Tauri 2<br>sing-box ${esc(state.cores['sing-box'])} · Mihomo ${esc(state.cores.mihomo)}</p>`;
 }
 function logs(){return `<div class="section-heading"><h2>Журнал подключения</h2></div><p class="muted" style="margin-bottom:16px">Последние 300 записей. Ссылки, пароли и ключи скрыты. Журнал хранится в памяти.</p><div class="card log" id="log-lines">${esc(state.logs.join('\n') || 'Записей пока нет.')}</div>`;}
 function render(){
@@ -227,27 +227,29 @@ function render(){
  updateSettingsSaveStatus();
 }
 function signature(){return state?JSON.stringify([state.profiles,state.subscriptions,state.selected,state.latency,state.measuring,state.settings.auto_sort_ping,state.error,state.subscriptions.map(s=>{const expiry=subscriptionExpiry(s);return expiry?[expiry.status,expiry.status==='soon'?expiry.days:0]:null;})]):'';}
-function updateHttpSites(connected){
+function canCheckHttpSites(){return state?.platform==='windows'&&!['connecting','disconnecting'].includes(state.status);}
+function updateHttpSites(){
  const button=$('#check-http-sites');
  if(!button)return;
  const pending=!!httpCheck?.pending;
  const label=pending?'Проверяем…':'Проверить HTTP';
  if(button.textContent!==label)button.textContent=label;
- button.disabled=!connected||busy||pending;
- button.title=connected?'HTTP GET по текущим правилам маршрутизации':'Подключите VPN, чтобы проверить сайты';
+ button.disabled=!canCheckHttpSites()||busy||pending;
+ button.title=state.status==='connected'?'HTTPS GET по текущим правилам маршрутизации':'Прямой HTTPS GET без VPN';
  button.setAttribute('aria-busy',String(pending));
  const output=$('#http-site-results');
  const items=httpSites.map(domain=>{
   const result=httpCheck?.results?.find(item=>item.domain===domain);
   const status=Number.isInteger(result?.status)?result.status:null;
-  const text=status!==null?`HTTP ${status}`:result?.error==='timeout'?'Тайм-аут':result?'Нет ответа':pending?'…':'—';
-  const color=status>=200&&status<400?'good':result?'error':'';
+  const milliseconds=result?.milliseconds;
+  const text=Number.isFinite(milliseconds)?`${milliseconds.toFixed(1)} мс`:status!==null?`HTTP ${status}`:result?.error==='timeout'?'Тайм-аут':result?'Нет ответа':pending?'…':'—';
+  const color=status>=200&&status<300?'good':status>=300&&status<400?'':result?'error':'';
   return `<div><dt>${domain}</dt><dd class="${color}">${text}</dd></div>`;
  }).join('');
  if(output.innerHTML!==items)output.innerHTML=items;
 }
 async function checkHttpSites(){
- if(state?.platform!=='windows'||state.status!=='connected'||busy||httpCheck?.pending)return;
+ if(!canCheckHttpSites()||busy||httpCheck?.pending)return;
  const check={pending:true,results:null};
  httpCheck=check;
  updateStatus();
@@ -266,7 +268,7 @@ function updateStatus(){
  $('#status-pill').textContent=statusNames[s]||s;$('#status-pill').className='status-pill '+s;
  if(tab==='home'){
   const connected=s==='connected',result=connected?state.latency[state.selected]:null;
-  updateHttpSites(connected);
+  updateHttpSites();
   const measureButton=$('#measure-selected');measureButton.disabled=!connected||!state.selected||state.measuring||busy;
   measureButton.title=connected?'Измерить задержку подключённого сервера':'Подключите VPN, чтобы проверить задержку';
   const orb=$('.connect-orb'),orbClass='connect-orb '+s;
@@ -286,7 +288,7 @@ function updateStatus(){
  if(tab==='logs'&&$('#log-lines'))$('#log-lines').textContent=state.logs.join('\n')||'Записей пока нет.';
 }
 function accept(value){if(value?.snapshot)value=value.snapshot;if(!value?.profiles)return;const old=lastSignature;
- if(value.status!=='connected'||state?.active!==value.active)httpCheck=null;
+ if(state?.status!==value.status||state?.active!==value.active)httpCheck=null;
  state=value;
  if(!$('#view').dataset.ready){$('#view').dataset.ready='1';render();}
  else if(tab!=='settings'&&old!==signature())render();else updateStatus();

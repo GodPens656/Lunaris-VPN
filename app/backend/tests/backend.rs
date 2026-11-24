@@ -152,6 +152,38 @@ fn android_sidecars_use_local_binding_gvisor_and_routing() {
 }
 
 #[test]
+fn android_proxy_probes_authenticate_and_route_through_the_candidate() {
+    let profile = parser::parse_uri(uri(), None).unwrap();
+    let mut settings = Settings {
+        mode: "tun".into(),
+        bypass_russian_domains: true,
+        bypass_domains: vec!["example.com".into()],
+        ..Default::default()
+    };
+    let sing = config::android_proxy_probe(&profile, &settings, "api", "probe-secret").unwrap();
+    assert_eq!(sing["inbounds"].as_array().unwrap().len(), 1);
+    let inbound = &sing["inbounds"][0];
+    assert_eq!(inbound["type"], "mixed");
+    assert_eq!(inbound["listen"], "127.0.0.1");
+    assert_eq!(inbound["listen_port"], settings.mixed_port);
+    assert_eq!(
+        inbound["users"],
+        json!([{"username":"lunaris","password":"probe-secret"}])
+    );
+    assert_eq!(sing["outbounds"][0]["inet4_bind_address"], "127.0.0.1");
+    assert_eq!(sing["route"]["final"], "proxy");
+    assert_eq!(sing["route"]["rules"].as_array().unwrap().len(), 2);
+
+    settings.core = "mihomo".into();
+    let config = config::android_proxy_probe(&profile, &settings, "api", "probe-secret").unwrap();
+    let mihomo = &config["sever_mihomo"];
+    assert_eq!(mihomo["tun"]["enable"], false);
+    assert_eq!(mihomo["mixed-port"], settings.mixed_port);
+    assert_eq!(mihomo["authentication"], json!(["lunaris:probe-secret"]));
+    assert_eq!(mihomo["rules"], json!(["MATCH,proxy"]));
+}
+
+#[test]
 fn custom_bypass_domains_normalize_idna_and_reject_non_domains() {
     let old: Settings = serde_json::from_value(json!({})).unwrap();
     assert!(old.bypass_domains.is_empty());
